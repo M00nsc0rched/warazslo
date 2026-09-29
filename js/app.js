@@ -344,6 +344,27 @@ export class App extends Emitter {
     if (this.doc && this.doc.state.planes.length) this._syncPlanes();
     const sum = selectionSummary(this, sel);
     this.ui.setSelectionInfo(sum.text);
+    this._updateDimBubble(sel);
+  }
+
+  /** Egyetlen kijelölt vázlatgörbe mérete egy koppintható buborékban. */
+  _updateDimBubble(sel) {
+    if (this._dimBubble) { this._dimBubble.remove(); this._dimBubble = null; }
+    if (!this.doc || this.tool || this.mode === 'view' || sel.length !== 1 || sel[0].type !== 'curve') return;
+    const s = sel[0];
+    const sk = this.doc.sketch(s.sketchId);
+    const c = sk && sk.curves.find((x) => x.id === s.curveId);
+    if (!c || !['line', 'circle', 'arc'].includes(c.t)) return;
+    const f = planeFromJSON(sk.plane);
+    const mid = c.t === 'line' ? [(c.a[0] + c.b[0]) / 2, (c.a[1] + c.b[1]) / 2] : c.t === 'circle' ? [c.c[0] + c.r * 0.7071, c.c[1] + c.r * 0.7071] : [c.c[0] + c.r * Math.cos((c.a0 + c.a1) / 2), c.c[1] + c.r * Math.sin((c.a0 + c.a1) / 2)];
+    import('./sketch/edit.js').then(({ dimensionText, editCurveDimension }) => {
+      if (this.sel !== sel) return;
+      const b = this.handles.bubble({ onTap: () => editCurveDimension(this, sk, c) });
+      b.set(dimensionText(c));
+      b.at(toWorld(f, mid));
+      this._dimBubble = b;
+      this.vp.requestRender();
+    });
   }
 
   /** Koppintás alatti elem (egységes kiválasztási logika). */
@@ -409,6 +430,7 @@ export class App extends Emitter {
     } else {
       this.ui.hidePanel();
     }
+    this._updateDimBubble(this.sel);
     this.updateToolbar();
     this.vp.requestRender();
   }
