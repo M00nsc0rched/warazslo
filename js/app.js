@@ -211,6 +211,7 @@ export class App extends Emitter {
     })));
     this.sketches.sync(st, iso ? [...hidden, ...st.sketches.map((s) => s.id).filter((id) => !iso.has(id))] : hidden);
     this._syncPlanes();
+    this._syncImages();
     this.vp.updateSceneBounds(this.bodies.bounds());
     this._applySelectionVisuals();
   }
@@ -237,6 +238,37 @@ export class App extends Emitter {
       grp.userData.planeId = p.id;
       mesh.userData.planeId = p.id;
       g.add(grp);
+    }
+    this.vp.requestRender();
+  }
+
+  /** Referencia képek (textúrázott síkok) szinkronizálása. */
+  _syncImages() {
+    if (!this._imageGroup) { this._imageGroup = new THREE.Group(); this.vp.helperGroup.add(this._imageGroup); this._imageTex = new Map(); }
+    const g = this._imageGroup;
+    for (const o of [...g.children]) { g.remove(o); o.geometry.dispose(); o.material.dispose(); }
+    const hidden = this.doc.view.hidden || [];
+    const imgs = this.doc.state.images || [];
+    const alive = new Set(imgs.map((i) => i.id));
+    for (const [id, t] of this._imageTex) if (!alive.has(id)) { t.dispose(); this._imageTex.delete(id); }
+    for (const im of imgs) {
+      if (hidden.includes(im.id)) continue;
+      let tex = this._imageTex.get(im.id);
+      if (!tex || tex.userData.src !== im.dataUrl) {
+        tex = new THREE.TextureLoader().load(im.dataUrl, () => this.vp.requestRender());
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.userData.src = im.dataUrl;
+        this._imageTex.set(im.id, tex);
+      }
+      const f = planeFromJSON(im.plane);
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(im.w, im.h), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: im.opacity ?? 0.6, side: THREE.DoubleSide, depthWrite: false }));
+      const m = new THREE.Matrix4().makeBasis(f.xDir, f.yDir, f.normal);
+      m.setPosition(f.origin.clone().addScaledVector(f.normal, -0.01));
+      mesh.matrixAutoUpdate = false;
+      mesh.matrix.copy(m).multiply(new THREE.Matrix4().makeTranslation(im.w / 2, im.h / 2, 0));
+      mesh.renderOrder = -1;
+      mesh.raycast = () => {};
+      g.add(mesh);
     }
     this.vp.requestRender();
   }

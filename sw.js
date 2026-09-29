@@ -1,6 +1,6 @@
 // Warázsló service worker: offline gyorsítótár
 // A VERSION értékét minden kiadásnál növelni kell (tools/bump-version.ps1).
-const VERSION = 'v1';
+const VERSION = 'v20260929-110532';
 const CACHE = `warazslo-${VERSION}`;
 const CORE = [
   './', './index.html', './manifest.webmanifest', './css/app.css',

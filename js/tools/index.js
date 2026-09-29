@@ -233,7 +233,6 @@ function sketchMenu(app, anchor) {
     { sep: true },
     { icon: 'trim', label: 'Vágás', sc: 'T', onTap: () => app.startTool('trim') },
     { icon: 'sketchFillet', label: 'Sarok lekerekítés', onTap: () => app.startTool('sketchFillet') },
-    { icon: 'text', label: 'Szöveg', onTap: () => app.startTool('text') },
   ]);
 }
 

@@ -375,10 +375,13 @@ input, textarea, select { font: inherit; color: inherit; -webkit-user-select: te
 /* ---------- kis képernyők (iPhone) ---------- */
 @media (max-width: 760px), (max-height: 560px) {
   :root { --tile-size: 42px; --gap: 5px; }
+  #leftbar .tbtn .label, #rightbar .tbtn .label { display: none; }
+  #topbar { left: calc(56px + var(--safe-l)); transform: none; align-items: flex-start; }
   .tile svg { width: 23px; height: 23px; }
-  #viewcube-slot { width: 92px; height: 92px; }
+  #viewcube-slot { width: 74px; height: 74px; }
   #topbar .title { height: 44px; }
-  #topbar .title .name { font-size: 15px; max-width: 40vw; }
+  #topbar .title .name { font-size: 15px; max-width: 22vw; padding: 0 4px; }
+  #topbar .icon-btn { width: 36px; height: 36px; }
   .toolpanel { padding: 6px; gap: 6px; }
   .field .fv { min-width: 52px; }
   .sheet.left { left: calc(56px + var(--safe-l)); width: calc(100vw - 66px - var(--safe-l)); }
