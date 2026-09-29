@@ -2,7 +2,7 @@
 // Írás: vonal, polivonal, kör, ív, szöveg – rétegekkel és szaggatott vonaltípussal (rejtett élek).
 // Olvasás: LINE, ARC, CIRCLE, LWPOLYLINE / POLYLINE (ívszakaszokkal), SPLINE, ELLIPSE, POINT,
 // TEXT / MTEXT, INSERT (blokkok, eltolás/forgatás/méretezés) -> Warázsló vázlatgörbék (mm).
-import { curvePolylines } from '../sketch/geom2d.js';
+import { curvePolylines, transformCurves2D as transformCurves } from '../sketch/geom2d.js';
 
 const TAU = Math.PI * 2;
 const deg = (r) => (r * 180) / Math.PI;
@@ -227,49 +227,6 @@ function sampleBSpline(deg, knots, ctrl, weights, n) {
       }
     }
     out.push([d[p][0] / d[p][2], d[p][1] / d[p][2]]);
-  }
-  return out;
-}
-
-function transformCurves(curves, T) {
-  // T: { m: [a,b,c,d], t:[x,y] } – x' = a x + b y + tx ; y' = c x + d y + ty
-  const [a, b, c, d] = T.m;
-  const P = (q) => [a * q[0] + b * q[1] + T.t[0], c * q[0] + d * q[1] + T.t[1]];
-  const det = a * d - b * c;
-  const sx = Math.sqrt(Math.abs(det));
-  const uniform = Math.abs(Math.hypot(a, c) - Math.hypot(b, d)) < 1e-9 && Math.abs(a * b + c * d) < 1e-9;
-  const angOf = (ang) => Math.atan2(c * Math.cos(ang) + d * Math.sin(ang), a * Math.cos(ang) + b * Math.sin(ang));
-  const out = [];
-  for (const cv of curves) {
-    switch (cv.t) {
-      case 'line': out.push({ ...cv, a: P(cv.a), b: P(cv.b) }); break;
-      case 'point': out.push({ ...cv, p: P(cv.p) }); break;
-      case 'spline': out.push({ ...cv, pts: cv.pts.map(P) }); break;
-      case 'text': out.push({ ...cv, p: P(cv.p), size: cv.size * sx, rot: angOf(cv.rot || 0), ...(det < 0 ? { mirror: !cv.mirror } : {}) }); break;
-      case 'circle':
-        if (uniform) out.push({ ...cv, c: P(cv.c), r: cv.r * sx });
-        else out.push({ t: 'spline', closed: true, pts: Array.from({ length: 24 }, (_, i) => P([cv.c[0] + cv.r * Math.cos(i * TAU / 24), cv.c[1] + cv.r * Math.sin(i * TAU / 24)])) });
-        break;
-      case 'arc': {
-        if (uniform) {
-          let a0 = angOf(cv.a0), a1 = angOf(cv.a1);
-          if (det < 0) [a0, a1] = [a1, a0];
-          while (a1 <= a0) a1 += TAU;
-          out.push({ ...cv, c: P(cv.c), r: cv.r * sx, a0, a1 });
-        } else {
-          const n = 16;
-          out.push({ t: 'spline', pts: Array.from({ length: n + 1 }, (_, i) => { const t = cv.a0 + (cv.a1 - cv.a0) * i / n; return P([cv.c[0] + cv.r * Math.cos(t), cv.c[1] + cv.r * Math.sin(t)]); }) });
-        }
-        break;
-      }
-      case 'ellipse': {
-        const cc = P(cv.c);
-        const ax = P([cv.c[0] + cv.rx * Math.cos(cv.rot || 0), cv.c[1] + cv.rx * Math.sin(cv.rot || 0)]);
-        out.push({ ...cv, c: cc, rx: Math.hypot(ax[0] - cc[0], ax[1] - cc[1]), ry: cv.ry * sx, rot: Math.atan2(ax[1] - cc[1], ax[0] - cc[0]) });
-        break;
-      }
-      default: out.push(cv);
-    }
   }
   return out;
 }

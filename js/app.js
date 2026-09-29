@@ -904,6 +904,12 @@ export class App extends Emitter {
     this.setTool(null);
   }
 
+  /** Egy vázlat-segédeszköz vége: vázlat módban vissza a rajzoláshoz (vonal), különben nincs eszköz. */
+  finishSketchTool(frame) {
+    if (this._sketchPrevOrtho != null && frame) this.startTool('line', { frame });
+    else this.setTool(null);
+  }
+
   /** Hosszú nyomás: teljes test kijelölése és helyzetmenü. */
   _longPress(ev) {
     if (!this.doc) return;

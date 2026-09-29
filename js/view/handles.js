@@ -274,6 +274,8 @@ export class MoveGizmo extends Handle {
       this.obj.add(ring);
       this.rings.push(ring);
     }
+    // síkbeli mód (vázlatgörbék): csak az első két tengely nyila és a harmadik körüli gyűrű
+    if (opts.planar) { this.rings[0].visible = false; this.rings[1].visible = false; }
     this.ball = new THREE.Mesh(new THREE.SphereGeometry(0.12, 18, 14), new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
     this.obj.add(this.ball);
     this.obj.traverse((o) => { o.renderOrder = 20; });
@@ -294,7 +296,7 @@ export class MoveGizmo extends Handle {
     // a nyilak a kamera felé forduljanak (negatív tengelyirány, ha az jobban látszik)
     for (let i = 0; i < 3; i++) {
       const toCam = vp.camera.position.clone().sub(c).normalize();
-      this.arrows[i].visible = Math.abs(this.axes[i].dot(vp.viewDir)) < 0.985;
+      this.arrows[i].visible = !(this.o.planar && i === 2) && Math.abs(this.axes[i].dot(vp.viewDir)) < 0.985;
       void toCam;
     }
   }
@@ -316,6 +318,7 @@ export class MoveGizmo extends Handle {
       if (d < tol + 4 && (!best || d < best.d)) best = { d, part: 'axis', i };
     }
     for (let i = 0; i < 3; i++) {
+      if (!this.rings[i].visible) continue;
       const a1 = this.axes[(i + 1) % 3], a2 = this.axes[(i + 2) % 3];
       for (let k = 0; k <= 16; k++) {
         const t = (k / 16) * Math.PI / 2;
@@ -337,7 +340,7 @@ export class MoveGizmo extends Handle {
       const ray = vp.rayAt(ev.x, ev.y);
       this.off = closestOnAxis(ray, c, this.axes[part.i]);
     } else if (part.part === 'ball') {
-      this.planeN = vp.viewDir.clone();
+      this.planeN = this.o.planar ? this.axes[2].clone() : vp.viewDir.clone();
       this.p0 = vp.rayPlane(ev.x, ev.y, c, this.planeN);
     } else if (part.part === 'ring') {
       this.rotAxisIdx = part.i;

@@ -23,6 +23,7 @@ import { GearTool } from './gear.js';
 import { SKETCH_TOOLS, SketchPaletteTool } from '../sketch/tools.js';
 import { ReplaceFaceTool, ProjectTool, AlignTool, AxisTool } from './extra.js';
 import { TextTool, editTextCurve } from '../sketch/texttool.js';
+import { SketchTransformTool, mirrorSketchSelection } from '../sketch/transform.js';
 
 const REGISTRY = {
   extrude: ExtrudeTool, fillet: FilletTool, chamfer: FilletTool, shell: ShellTool, offsetFace: OffsetFaceTool,
@@ -31,6 +32,7 @@ const REGISTRY = {
   measure: MeasureTool, section: SectionTool, plane: PlaneTool, gear: GearTool, sketch: SketchPaletteTool,
   replaceFace: ReplaceFaceTool, project: ProjectTool, offsetEdge: ProjectTool, align: AlignTool, axis: AxisTool,
   text: TextTool,
+  sketchTransform: SketchTransformTool,
   ...SKETCH_TOOLS,
 };
 
@@ -140,7 +142,9 @@ export function buildLeftToolbar(app) {
         ctx.push(T('offsetCurve', 'offsetCurve', 'Görbe eltolás'));
         ctx.push(T('sweep', 'sweep', 'Söprés útvonal'));
       }
-      ctx.push(T('move', 'move', 'Mozgatás/Forgatás', { kbd: 'M' }));
+      if (c.curve || c.region) ctx.push(T('sketchTransform', 'move', 'Görbék mozgatása', { sub: 'Forgatás, másolás, kiosztás' }));
+      if ((c.curve || 0) >= 2) ctx.push({ icon: 'mirror', label: 'Tükrözés vonalra', sub: 'Az utoljára kijelölt vonalra', onTap: () => mirrorSketchSelection(app) });
+      ctx.push(T('move', 'move', 'Vázlat mozgatása', { kbd: 'M', sub: 'A teljes vázlat' }));
       // kényszerek és méretek a kijelölt vázlatelemekre
       const ss = sketchSelection(app);
       const opts = applicable(ss);

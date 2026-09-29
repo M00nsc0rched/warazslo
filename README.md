@@ -11,6 +11,8 @@ előfizetés nélkül. Böngészőben fut, telepíthető a főképernyőre, és 
 
 - **Vázlat** (csak Apple Pencillel): vonal(lánc), téglalap, középpontos téglalap, kör, 3 pontos és érintő ív,
   spline, sokszög, hosszlyuk, ellipszis, pont; vágás, sarok-lekerekítés, görbe-eltolás.
+  - **Görbék mozgatása / forgatása / másolása** a vázlat síkjában, ismétléssel (lineáris és körkörös vázlat-kiosztás,
+    a kijelölt pont körül), **tükrözés** a kijelölt vonalra; a belső kényszerek megmaradnak.
   - **Szöveg:** 5 betűtípus (Roboto családból, ékezetekkel), betűmagasság, betűköz, igazítás, elforgatás;
     a kijelölt szöveg egy lépésben kihúzható (dombornyomás / bemélyítés), dupla koppintással szerkeszthető.
   - **Szabadkézi rajz alakfelismeréssel:** a Pencillel húzott vonalból egyenes, ív, kör, téglalap, sokszög,

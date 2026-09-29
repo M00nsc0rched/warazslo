@@ -93,10 +93,16 @@ export class DrawTool extends Tool {
   }
 
   done() {
-    if (this.pts.length && this.finishEntity) this.finishEntity();
-    this.app.setTool(null);
+    const busy = this.pts.length > 0;
+    if (busy && this.finishEntity) this.finishEntity();
+    // vázlat módban a segédeszközök után vissza a vonalhoz; a vonal "Kész"-e (ha nincs félkész elem) kilép
+    if (this.lockedFrame && this.toolId !== 'line') this.app.finishSketchTool(this.frame);
+    else if (!(this.lockedFrame && busy)) this.app.setTool(null);
   }
-  cancel() { this.app.setTool(null); }
+  cancel() {
+    if (this.lockedFrame && this.toolId !== 'line') this.app.finishSketchTool(this.frame);
+    else this.app.setTool(null);
+  }
 
   /** Sík meghatározása az első ponthoz. */
   resolveFrame(ev) {
@@ -927,6 +933,7 @@ export class OffsetCurveTool extends Tool {
     this.arrow = this.addHandle(new ArrowHandle(this.app.handles, { origin: W, dir: N, value: this.d, onChange: (v) => { this.d = v; this.update(); }, onTap: () => this.edit() }));
     this.update();
   }
+  cancel() { this.app.finishSketchTool(this.frame); }
   stop() { super.stop(); this.prev && this.prev.dispose(); }
   edit() { this.app.ui.keypad({ label: 'Eltolás', kind: 'len', value: this.d, onDone: (v) => { this.d = v; this.arrow.setValue(v); this.update(); } }); }
   update() { this.result = offsetCurves(this.curves, this.d); this.prev.set(this.frame, this.result); this.refreshPanel(); }
@@ -936,7 +943,7 @@ export class OffsetCurveTool extends Tool {
     this.app.lastOffset = Math.abs(this.d);
     const out = this.result.map((c) => ({ ...c, id: uid('c') }));
     this.app.updateSketch(this.sketchId, (s) => ({ ...s, curves: [...s.curves, ...out] }), 'Görbe eltolás', 'offsetCurve');
-    this.app.setTool(null);
+    this.app.finishSketchTool(this.frame);
   }
 }
 
@@ -1023,6 +1030,8 @@ export class SketchPaletteTool extends LineTool {
       B('trim', 'trim', 'Vágás', { kbd: 'T' }),
       { icon: 'trash', label: 'Törlés', disabled: !selCount, onTap: () => app.deleteSelection() },
       ...(txt ? [{ icon: 'text', label: 'Szöveg szerk.', onTap: () => import('./texttool.js').then((m) => m.editTextCurve(app, txt.sketchId, txt.curveId)) }] : []),
+      ...(selCurves.length || app.sel.some((s) => s.type === 'region') ? [{ icon: 'move', label: 'Mozgatás', sub: 'Forgatás, másolás', active: cur === 'sketchTransform', onTap: () => app.startTool('sketchTransform') }] : []),
+      ...(selCurves.length >= 2 ? [{ icon: 'mirror', label: 'Tükrözés', sub: 'Utolsó vonalra', onTap: () => import('./transform.js').then((m) => m.mirrorSketchSelection(app)) }] : []),
       { icon: 'construction', label: 'Segédvonal', sub: app.sketchConstruction ? 'Be' : 'Ki', active: !!app.sketchConstruction, onTap: () => { app.sketchConstruction = !app.sketchConstruction; app.updateToolbar(); app.tool && app.tool.refreshPanel && app.tool.refreshPanel(); } },
     ];
   }
