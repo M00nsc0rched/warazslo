@@ -1,0 +1,11 @@
+# helyi fejlesztői beállítások
+.claude/
+
+# forrásképek (személyes minták, nem kellenek a kiadáshoz)
+minta*.png
+ikon_illusztracio.jpeg
+
+# rendszerfájlok
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8">
+  <title>Warázsló</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="description" content="Warázsló – 3D CAD modellező iPadre és iPhone-ra, Apple Pencil támogatással.">
+  <meta name="theme-color" content="#0c0c0e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Warázsló">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="icons/favicon-64.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js",
+        "three/addons/": "./vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <canvas id="viewport" tabindex="0"></canvas>
+    <div id="overlay"></div>
+    <div id="ui"></div>
+  </div>
+  <div id="boot">
+    <img src="icons/logo-256.png" alt="" width="112" height="112">
+    <div class="boot-title">Warázsló</div>
+    <div class="boot-status" id="boot-status">Betöltés…</div>
+  </div>
+  <noscript>A Warázsló működéséhez JavaScript szükséges.</noscript>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

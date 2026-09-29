@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="hu">
+<head><meta charset="utf-8"><title>Kernel teszt</title></head>
+<body style="font: 12px monospace; background:#111; color:#ddd">
+<pre id="out">betöltés…</pre>
+<script type="module">
+const out = document.getElementById('out');
+const log = (...a) => { out.textContent += '\n' + a.map((x) => typeof x === 'string' ? x : JSON.stringify(x)).join(' '); };
+const t0 = performance.now();
+const w = new Worker(new URL('../js/kernel/worker.js', import.meta.url), { type: 'module' });
+let seq = 1; const pending = new Map();
+w.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === 'ready') { log('ready', Math.round(performance.now() - t0) + 'ms'); run(); return; }
+  if (m.type === 'fatal') { log('FATAL', m.error); return; }
+  const p = pending.get(m.id); pending.delete(m.id);
+  m.ok ? p.res(m.result) : p.rej(m);
+};
+w.onerror = (e) => log('worker error', e.message);
+const call = (method, params) => new Promise((res, rej) => { const id = seq++; pending.set(id, { res, rej }); w.postMessage({ id, method, params }); });
+window.kcall = call;
+
+let rev = 1;
+const bodies = new Map(); // id -> {id, rev}
+async function op(name, args, label) {
+  const t = performance.now();
+  try {
+    const r = await call('op', { name, args, preview: false });
+    const assign = r.results.map((x, i) => ({ handle: x.handle, id: x.role === 'modified' ? x.sourceId : `b${rev}_${i}`, rev: rev++ }));
+    const fin = await call('finalize', { assign });
+    for (const a of assign) bodies.set(a.id, { id: a.id, rev: a.rev });
+    for (const id of r.removed) bodies.delete(id);
+    const summ = r.results.map((x, i) => ({ id: assign[i].id, role: x.role, faces: x.mesh.faces.length, edges: x.mesh.edges.length, vol: Math.round(x.mesh.volume * 100) / 100, tris: x.mesh.triangles.length / 3 }));
+    log(`OK ${label || name}`, Math.round(performance.now() - t) + 'ms', summ, 'removed', r.removed, 'brepLen', fin.map((f) => f.brep.length));
+    return { r, assign };
+  } catch (e) { log(`FAIL ${label || name}`, e.error || e.message || e); return null; }
+}
+const B = (id) => bodies.get(id);
+async function run() {
+  try {
+    // doboz 40x30x20
+    const box = await op('primitive', { type: 'box', p: { w: 40, d: 30, h: 20 } }, 'box');
+    const boxId = box.assign[0].id;
+    const faces = box.r.results[0].mesh.faces;
+    const top = faces.findIndex((f) => f.type === 'PLANE' && f.normal[2] > 0.9);
+    log('top face', top, faces[top]);
+    await op('extrude', { profiles: [{ kind: 'face', body: B(boxId), face: top }], mode: 'one', d1: 5, op: 'join', targets: [B(boxId)] }, 'push face +5');
+    // régió a tetőn: kör lyuk kivágása
+    const region = { kind: 'region', plane: { origin: [20, 15, 25], xDir: [1, 0, 0], yDir: [0, 1, 0], normal: [0, 0, 1] }, loops: [[{ t: 'circle', c: [0, 0], r: 6 }]] };
+    await op('extrude', { profiles: [region], mode: 'one', d1: -10, op: 'cut', targets: [B(boxId)] }, 'cut circle -10');
+    // téglalap kihúzás új testként, lyukkal
+    const rect = { kind: 'region', plane: { origin: [60, 0, 0], xDir: [1, 0, 0], yDir: [0, 1, 0], normal: [0, 0, 1] }, loops: [
+      [{ t: 'line', a: [0, 0], b: [20, 0] }, { t: 'line', a: [20, 0], b: [20, 10] }, { t: 'arc', a: [20, 10], m: [10, 20], b: [0, 10] }, { t: 'line', a: [0, 10], b: [0, 0] }],
+      [{ t: 'circle', c: [10, 8], r: 3 }],
+    ] };
+    const nb = await op('extrude', { profiles: [rect], mode: 'sym', d1: 8, op: 'new' }, 'new body sym');
+    // fillet a doboz függőleges éleire
+    const m1 = (await call('mesh', { bodies: [B(boxId)] }))[0].mesh;
+    const vEdges = m1.edges.map((e, i) => ({ e, i })).filter(({ e }) => e.type === 'LINE' && Math.abs(e.dir[2]) > 0.99).map(({ i }) => i);
+    log('vertical edges', vEdges);
+    await op('fillet', { body: B(boxId), edges: vEdges, radius: 4 }, 'fillet r4');
+    const m2 = (await call('mesh', { bodies: [B(boxId)] }))[0].mesh;
+    const bottom = m2.faces.findIndex((f) => f.type === 'PLANE' && f.normal[2] < -0.9);
+    await op('shell', { body: B(boxId), faces: [bottom], thickness: 2 }, 'shell 2');
+    // furat
+    await op('hole', { body: B(boxId), point: [8, 8, 25], normal: [0, 0, 1], d: 4, kind: 'countersink', cd: 8, angle: 90, depth: 0 }, 'hole countersink');
+    // forgatás
+    const prof = { kind: 'region', plane: { origin: [0, 60, 0], xDir: [1, 0, 0], yDir: [0, 0, 1], normal: [0, -1, 0] }, loops: [[{ t: 'line', a: [5, 0], b: [15, 0] }, { t: 'line', a: [15, 0], b: [15, 10] }, { t: 'line', a: [15, 10], b: [5, 10] }, { t: 'line', a: [5, 10], b: [5, 0] }]] };
+    const rv = await op('revolve', { profiles: [prof], axis: { origin: [0, 60, 0], dir: [0, 0, 1] }, angle: 360, op: 'new' }, 'revolve');
+    const rvId = rv.assign[0].id;
+    // hengeres lap eltolása (belső lyuk)
+    const m3 = (await call('mesh', { bodies: [B(rvId)] }))[0].mesh;
+    const cyls = m3.faces.map((f, i) => ({ f, i })).filter(({ f }) => f.type === 'CYLINDRE');
+    log('cyl faces', cyls.map(({ f, i }) => [i, f.radius, f.normal]));
+    const inner = cyls.find(({ f }) => f.radius < 6);
+    if (inner) await op('offsetFaces', { body: B(rvId), faces: [inner.i], distance: 2 }, 'offset inner cyl +2');
+    await op('chamfer', { body: B(rvId), edges: [0, 1], distance: 1 }, 'chamfer');
+    await op('mirror', { bodies: [B(rvId)], origin: [0, 0, 0], normal: [1, 0, 0], copy: true }, 'mirror');
+    await op('pattern', { bodies: [B(rvId)], kind: 'circular', count: 4, axis: { origin: [0, 0, 0], dir: [0, 0, 1] }, angle: 360 }, 'pattern circ');
+    await op('split', { body: B(boxId), tool: { kind: 'plane', origin: [20, 15, 10], normal: [1, 0, 0] } }, 'split');
+    for (const k of ['cylinder', 'sphere', 'cone', 'torus', 'wedge']) await op('primitive', { type: k, p: { r: 5, h: 10, r1: 5, r2: 2, R: 10, w: 10, d: 5 }, frame: { origin: [0, -50, 0], xDir: [1, 0, 0], yDir: [0, 1, 0], normal: [0, 0, 1] } }, 'prim ' + k);
+    const all = [...bodies.values()];
+    const step = await call('query', { name: 'exportFile', args: { format: 'step', bodies: all } });
+    log('STEP bytes', step.byteLength);
+    const stl = await call('query', { name: 'exportFile', args: { format: 'stl', bodies: all } });
+    log('STL bytes', stl.byteLength);
+    const imp = await op('importFile', { format: 'step', data: step, name: 'import' }, 'import STEP');
+    const dist = await call('query', { name: 'distance', args: { a: { kind: 'point', point: [0, 0, 100] }, b: { kind: 'body', body: B(boxId) } } });
+    log('distance', dist);
+    const props = await call('query', { name: 'properties', args: { bodies: [B(boxId)] } });
+    log('props', props);
+    const proj = await call('query', { name: 'projection', args: { bodies: [B(rvId)], view: 'front' } });
+    log('projection', proj.visible.length, proj.hidden.length, JSON.stringify(proj.visible[0]));
+  } catch (e) { log('ERR', e.message || e.error || e); }
+  log('DONE', Math.round(performance.now() - t0) + 'ms');
+  window.testDone = true;
+}
+</script>
+</body>
+</html>
