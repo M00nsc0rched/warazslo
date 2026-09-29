@@ -32,7 +32,7 @@ function curveMid(sketch, ref) {
   if (c.t === 'arc') { const m = (c.a0 + c.a1) / 2; return { p: [c.c[0] + c.r * Math.cos(m), c.c[1] + c.r * Math.sin(m)], n: [Math.cos(m), Math.sin(m)] }; }
   if (c.t === 'ellipse') return { p: c.c, n: [0, 1] };
   if (c.t === 'spline') return { p: c.pts[Math.floor(c.pts.length / 2)], n: [0, 1] };
-  if (c.t === 'point') return { p: c.p, n: [0, 1] };
+  if (c.t === 'point' || c.t === 'text') return { p: c.p, n: [0, 1] };
   return null;
 }
 

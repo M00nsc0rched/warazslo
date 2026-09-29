@@ -11,6 +11,8 @@ előfizetés nélkül. Böngészőben fut, telepíthető a főképernyőre, és 
 
 - **Vázlat** (csak Apple Pencillel): vonal(lánc), téglalap, középpontos téglalap, kör, 3 pontos és érintő ív,
   spline, sokszög, hosszlyuk, ellipszis, pont; vágás, sarok-lekerekítés, görbe-eltolás.
+  - **Szöveg:** 5 betűtípus (Roboto családból, ékezetekkel), betűmagasság, betűköz, igazítás, elforgatás;
+    a kijelölt szöveg egy lépésben kihúzható (dombornyomás / bemélyítés), dupla koppintással szerkeszthető.
   - **Szabadkézi rajz alakfelismeréssel:** a Pencillel húzott vonalból egyenes, ív, kör, téglalap, sokszög,
     ellipszis vagy spline lesz. **Firkálás egy görbén = törlés.**
   - Illesztés végpontokra, középpontokra, felezőpontokra, görbékre, test-csúcsokra, vízszintes/függőleges igazítás, rács.
@@ -63,4 +65,5 @@ powershell -ExecutionPolicy Bypass -File tools/deploy.ps1 "üzenet"   # kiadás 
 Tesztek a böngészőben: `tools/kernel-test.html`, `tools/regions-test.html`, valamint az alkalmazásban a
 konzolból: `await (await import('/tools/app-test.js')).run()`.
 
-Licencek: three.js (MIT), replicad (MIT), OpenCascade / replicad-opencascadejs (LGPL-2.1) – lásd `vendor/*/LICENSE`.
+Licencek: three.js (MIT), replicad (MIT), OpenCascade / replicad-opencascadejs (LGPL-2.1), opentype.js (MIT),
+Roboto betűtípusok (Apache-2.0) – lásd `vendor/*/LICENSE`.

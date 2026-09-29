@@ -4,7 +4,7 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { computeRegions, pointInRegion } from './regions.js';
-import { curvePolyline, curveDistance, curveKeyPoints, curveEnds, dist } from './geom2d.js';
+import { curvePolylines, curveDistance, curveKeyPoints, curveEnds, dist } from './geom2d.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const COL = {
@@ -118,14 +118,14 @@ class SketchGfx {
     const normal = [], cons = [];
     for (const c of sketch.curves) {
       if (c.t === 'point') continue;
-      (c.construction ? cons : normal).push(curvePolyline(c));
+      (c.construction ? cons : normal).push(...curvePolylines(c));
     }
     setLinePositions(this.lines, normal);
     setLinePositions(this.cons, cons);
     // pontok: végpontok, középpontok
     const pts = [];
     for (const c of sketch.curves) {
-      if (c.t === 'point') pts.push(c.p);
+      if (c.t === 'point' || c.t === 'text') pts.push(c.p);
       for (const e of curveEnds(c)) pts.push(e);
       if (c.t === 'circle' || c.t === 'arc' || c.t === 'ellipse') pts.push(c.c);
     }
@@ -155,9 +155,9 @@ class SketchGfx {
   }
 
   setCurveHighlights(selCurves, hoverCurve, selPoints) {
-    const sel = this.sketch.curves.filter((c) => selCurves.has(c.id) && c.t !== 'point').map(curvePolyline);
+    const sel = this.sketch.curves.filter((c) => selCurves.has(c.id) && c.t !== 'point').flatMap(curvePolylines);
     setLinePositions(this.selLines, sel);
-    const hov = hoverCurve ? this.sketch.curves.filter((c) => c.id === hoverCurve && c.t !== 'point').map(curvePolyline) : [];
+    const hov = hoverCurve ? this.sketch.curves.filter((c) => c.id === hoverCurve && c.t !== 'point').flatMap(curvePolylines) : [];
     setLinePositions(this.hoverLines, hov);
     const arr = new Float32Array((selPoints || []).length * 3);
     (selPoints || []).forEach((p, i) => { arr[i * 3] = p[0]; arr[i * 3 + 1] = p[1]; });
@@ -206,6 +206,20 @@ export class SketchManager {
     this.selPoints = [];          // [{sketchId, p}]
     this.hover = null;
     this.vp.on('resize', () => { for (const g of this.gfx.values()) g.setResolution(this.vp.width, this.vp.height); });
+  }
+
+  /** Betűtípus betöltése után: a szöveget tartalmazó vázlatok újrarajzolása és régiói. */
+  invalidateText() {
+    const st = this.app.doc ? this.app.doc.state : null;
+    if (!st) return;
+    for (const s of st.sketches) {
+      if (!s.curves.some((c) => c.t === 'text')) continue;
+      this.regionCache.delete(s.id);
+      const g = this.gfx.get(s.id);
+      if (g) g.update(s);
+    }
+    this.refreshHighlights();
+    this.vp.requestRender();
   }
 
   /** Szinkronizálás a dokumentummal. */

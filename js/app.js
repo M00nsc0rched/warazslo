@@ -20,6 +20,7 @@ import { buildLeftToolbar, buildRightToolbar, buildSketchBar, createTool, select
 import { HomeScreen } from './ui/home.js';
 import { FreehandCapture } from './sketch/freehand.js';
 import { PointDrag } from './sketch/edit.js';
+import { onFontLoaded } from './sketch/text.js';
 import * as sheets from './ui/sheets.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
@@ -39,6 +40,7 @@ export class App extends Emitter {
     this.kernel.on('busy', (b) => this.ui.setBusy(b));
     this.kernel.on('restart', (msg) => this.ui.toast(msg, 'error', 4500));
     this.sketches = new SketchManager(this);
+    onFontLoaded(() => { this.sketches.invalidateText(); this.annotations && this.annotations.refresh && this.annotations.refresh(); });
     this.annotations = new SketchAnnotations(this);
     this.sel = [];
     this.tool = null;
@@ -828,6 +830,13 @@ export class App extends Emitter {
 
   _doubleTap(ev) {
     if (!this.doc) return;
+    // dupla koppintás egy szövegre: szerkesztés
+    if (this.mode !== 'view' && !(this.tool && this.tool.pts && this.tool.pts.length)) {
+      const pk = this.sketches.pick(ev.x, ev.y, pickTolerance(ev.pointerType), { regions: false, points: false });
+      const sk = pk && pk.type === 'curve' ? this.doc.sketch(pk.sketchId) : null;
+      const c = sk && sk.curves.find((x) => x.id === pk.curveId);
+      if (c && c.t === 'text') { import('./sketch/texttool.js').then((m) => m.editTextCurve(this, pk.sketchId, pk.curveId)); return; }
+    }
     if (this.tool && this.tool.doubleTap(ev)) return;
     const it = this.pickItem(ev);
     if (!it) { this.vp.fitBox(this.bodies.bounds()); return; }
@@ -980,6 +989,7 @@ export function convertCurves(curves, from, to) {
       case 'line': return { ...c, a: P(c.a), b: P(c.b) };
       case 'circle': return { ...c, c: P(c.c) };
       case 'point': return { ...c, p: P(c.p) };
+      case 'text': return { ...c, p: P(c.p), rot: ang(c.rot || 0, c.p), ...(flip ? { mirror: !c.mirror } : {}) };
       case 'spline': return { ...c, pts: c.pts.map(P) };
       case 'arc': {
         let a0 = ang(c.a0, c.c), a1 = ang(c.a1, c.c);

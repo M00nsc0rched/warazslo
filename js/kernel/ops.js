@@ -257,6 +257,11 @@ OPS.extrude = (args, ctx) => {
   }
   if (!solids.length) throw new KernelError('Nulla hosszú kihúzás');
   const tool = fuseAll(solids);
+  if (args.together && op === 'new') {
+    // szöveg: a betűk egy testet alkotnak (több különálló szilárd rész)
+    const shape = solids.length === 1 ? solids[0] : makeCompound(solids);
+    return { results: [{ shape, role: 'new', name: args.name }], removed: [] };
+  }
   return applyTool(tool, op, targets, ctx, args.name);
 };
 

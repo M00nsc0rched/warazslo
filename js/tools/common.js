@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { planeFromJSON, toWorld, canonicalFrame } from '../sketch/manager.js';
 import { pickTolerance } from '../view/picking.js';
+import { textInkRegions } from '../sketch/texttool.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 export const V3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
@@ -34,6 +35,16 @@ export function profilesFromSelection(app, sel = app.sel) {
       if (!fi || fi.type !== 'PLANE' || !fi.normal) continue;
       const b = app.doc.body(s.bodyId);
       out.push({ profile: { kind: 'face', body: { id: b.id, rev: b.rev }, face: s.index }, center: V3(fi.center), normal: V3(fi.normal), bodyId: s.bodyId, frame: canonicalFrame(V3(fi.normal), V3(fi.center)), area: fi.area });
+    } else if (s.type === 'curve') {
+      // kijelölt szöveg: a betűk régiói
+      const sk = app.doc.sketch(s.sketchId);
+      const c = sk && sk.curves.find((x) => x.id === s.curveId);
+      if (!c || c.t !== 'text') continue;
+      const f = planeFromJSON(sk.plane);
+      for (const reg of textInkRegions(app, sk, c)) {
+        if (sel.some((o) => o.type === 'region' && o.sketchId === sk.id && o.key === reg.key)) continue;
+        out.push({ profile: { kind: 'region', plane: sk.plane, loops: reg.loops }, center: toWorld(f, reg.centroid), normal: f.normal.clone(), sketchId: sk.id, frame: f, area: reg.area, text: true });
+      }
     }
   }
   return out;

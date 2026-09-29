@@ -1,6 +1,8 @@
 // 2D görbe primitívek: vonal, ív, kör, harmadfokú Bézier
 // Darab (piece): { k:'line', a, b } | { k:'arc', c, r, a0, a1 } (CCW, a1>a0) | { k:'circle', c, r } | { k:'bez', p:[p0,p1,p2,p3] }
 
+import { textPieces } from './text.js';
+
 export const TAU = Math.PI * 2;
 export const EPS = 1e-7;
 
@@ -361,6 +363,7 @@ export function curvePieces(c) {
     case 'arc': return c.r > 1e-9 && c.a1 > c.a0 ? [{ k: 'arc', c: c.c, r: c.r, a0: c.a0, a1: c.a1 }] : [];
     case 'spline': return splineToBeziers(c.pts, !!c.closed);
     case 'ellipse': return ellipseBeziers(c);
+    case 'text': return textPieces(c);
     default: return [];
   }
 }
@@ -406,6 +409,7 @@ export function curveKeyPoints(c) {
       c.pts.forEach((p, i) => out.push({ p, kind: (i === 0 || i === c.pts.length - 1) && !c.closed ? 'end' : 'ctrl' }));
       break;
     case 'point': out.push({ p: c.p, kind: 'point' }); break;
+    case 'text': out.push({ p: c.p, kind: 'point' }); break;
     case 'ellipse': {
       const cs = Math.cos(c.rot || 0), sn = Math.sin(c.rot || 0);
       out.push({ p: c.c, kind: 'center' });
@@ -425,6 +429,21 @@ export function curvePolyline(c) {
     const { pts } = flatten(pc, { minN: pc.k === 'bez' ? 20 : 1 });
     if (out.length) pts.shift();
     out.push(...pts);
+  }
+  return out;
+}
+
+/** Görbe lapított pontsorai, összefüggő szakaszonként (a szöveg több körvonalból áll). */
+export function curvePolylines(c) {
+  if (c.t === 'point') return [];
+  if (c.t !== 'text') return [curvePolyline(c)];
+  const out = [];
+  let cur = null, last = null;
+  for (const pc of curvePieces(c)) {
+    const { pts } = flatten(pc, { minN: pc.k === 'bez' ? 6 : 1, maxSeg: Math.max(0.05, (c.size || 5) / 40) });
+    if (cur && last && dist(last, pts[0]) < 1e-9) { pts.shift(); cur.push(...pts); }
+    else { cur = pts.slice(); out.push(cur); }
+    last = cur[cur.length - 1];
   }
   return out;
 }

@@ -22,6 +22,7 @@ import { PlaneTool } from './plane.js';
 import { GearTool } from './gear.js';
 import { SKETCH_TOOLS, SketchPaletteTool } from '../sketch/tools.js';
 import { ReplaceFaceTool, ProjectTool, AlignTool, AxisTool } from './extra.js';
+import { TextTool, editTextCurve } from '../sketch/texttool.js';
 
 const REGISTRY = {
   extrude: ExtrudeTool, fillet: FilletTool, chamfer: FilletTool, shell: ShellTool, offsetFace: OffsetFaceTool,
@@ -29,6 +30,7 @@ const REGISTRY = {
   pattern: PatternTool, revolve: RevolveTool, sweep: SweepTool, loft: LoftTool, split: SplitTool, hole: HoleTool,
   measure: MeasureTool, section: SectionTool, plane: PlaneTool, gear: GearTool, sketch: SketchPaletteTool,
   replaceFace: ReplaceFaceTool, project: ProjectTool, offsetEdge: ProjectTool, align: AlignTool, axis: AxisTool,
+  text: TextTool,
   ...SKETCH_TOOLS,
 };
 
@@ -130,7 +132,9 @@ export function buildLeftToolbar(app) {
       if ((c.region || 0) + sum.planarFaces >= 2) ctx.push(T('loft', 'loft', 'Átmenet (loft)'));
       if (c.region) ctx.push(T('move', 'move', 'Vázlat mozgatása'));
     } else if (only('curve', 'region', 'spoint', 'sketch')) {
-      if (c.region) ctx.push(T('extrude', 'extrude', 'Kihúzás', { kbd: 'E' }));
+      const textSel = selectedTextCurve(app);
+      if (c.region || textSel) ctx.push(T('extrude', 'extrude', 'Kihúzás', { kbd: 'E' }));
+      if (textSel) ctx.push({ icon: 'text', label: 'Szöveg szerkesztése', onTap: () => editTextCurve(app, textSel.sketchId, textSel.curveId) });
       if (c.curve) {
         ctx.push({ icon: 'construction', label: 'Segédvonal ki/be', onTap: () => sheets.toggleConstruction(app) });
         ctx.push(T('offsetCurve', 'offsetCurve', 'Görbe eltolás'));
@@ -244,6 +248,7 @@ function sketchMenu(app, anchor) {
     { icon: 'polygon', label: 'Sokszög', sc: 'P', onTap: () => app.startTool('polygon') },
     { icon: 'slot', label: 'Hosszlyuk', onTap: () => app.startTool('slot') },
     { icon: 'ellipse', label: 'Ellipszis', onTap: () => app.startTool('ellipse') },
+    { icon: 'text', label: 'Szöveg', onTap: () => app.startTool('text') },
     { icon: 'point', label: 'Pont', onTap: () => app.startTool('point') },
     { icon: 'freehand', label: 'Szabadkézi (Pencil)', onTap: () => app.startTool('freehand') },
     { sep: true },
@@ -406,4 +411,13 @@ export function buildSketchBar(app) {
       B('length', 'Méret', 'K', dimOpt ? () => addDefaultDimension(app) : null, 'dimension'),
     ],
   };
+}
+
+/** Az egyetlen kijelölt szöveggörbe (vagy null). */
+export function selectedTextCurve(app) {
+  const cs = app.sel.filter((s) => s.type === 'curve');
+  if (cs.length !== 1) return null;
+  const sk = app.doc.sketch(cs[0].sketchId);
+  const c = sk && sk.curves.find((x) => x.id === cs[0].curveId);
+  return c && c.t === 'text' ? cs[0] : null;
 }

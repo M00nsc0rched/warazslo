@@ -27,7 +27,7 @@ function rolesAt(sketch, p) {
       case 'spline':
         c.pts.forEach((q, i) => { if (dist(q, p) < EPS) out.push({ id: c.id, role: `pt${i}` }); });
         break;
-      case 'point':
+      case 'point': case 'text':
         if (dist(c.p, p) < EPS) out.push({ id: c.id, role: 'p' });
         break;
     }

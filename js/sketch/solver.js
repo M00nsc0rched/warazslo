@@ -14,7 +14,7 @@ export function curveParts(c) {
     case 'ellipse': return [['c', c.c]];
     case 'arc': return [['c', c.c], ['s', [c.c[0] + c.r * Math.cos(c.a0), c.c[1] + c.r * Math.sin(c.a0)]], ['e', [c.c[0] + c.r * Math.cos(c.a1), c.c[1] + c.r * Math.sin(c.a1)]]];
     case 'spline': return c.pts.map((p, i) => [`p${i}`, p]);
-    case 'point': return [['p', c.p]];
+    case 'point': case 'text': return [['p', c.p]];
     default: return [];
   }
 }
@@ -331,7 +331,7 @@ export function extractCurves(sys, x) {
       case 'line': return { ...c, a: p('a'), b: p('b') };
       case 'circle': return { ...c, c: p('c'), r: Math.abs(x[sys.scal.get(`${c.id}:r`)]) };
       case 'ellipse': return { ...c, c: p('c'), rx: Math.abs(x[sys.scal.get(`${c.id}:rx`)]), ry: Math.abs(x[sys.scal.get(`${c.id}:ry`)]), rot: x[sys.scal.get(`${c.id}:rot`)] };
-      case 'point': return { ...c, p: p('p') };
+      case 'point': case 'text': return { ...c, p: p('p') };
       case 'spline': return { ...c, pts: c.pts.map((_, i) => p(`p${i}`)) };
       case 'arc': {
         const C = p('c'), S = p('s'), E = p('e');

@@ -88,7 +88,8 @@ export class ExtrudeTool extends KernelTool {
     if (!nonzero) return null;
     const { op, targets } = this.resolveOp();
     this.resolved = op;
-    return { profiles: this.items.map((i) => i.profile), mode: this.mode, d1: this.d1, d2: this.d2, op, targets };
+    const text = this.items.length > 1 && this.items.every((i) => i.text);
+    return { profiles: this.items.map((i) => i.profile), mode: this.mode, d1: this.d1, d2: this.d2, op, targets, ...(text ? { together: true, name: 'Szöveg' } : {}) };
   }
 
   update() { this.requestPreview(); this.refreshPanel(); }

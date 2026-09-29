@@ -6,7 +6,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { Tool } from '../tools/base.js';
 import { planeFromJSON, samePlane, toLocal, toWorld } from './manager.js';
 import { snap, SnapViz } from './snap.js';
-import { curvePolyline, curvePieces, intersect, closest, dist, sub, add, mul, norm, perp, polar, angleOf, TAU, derivAt, evalAt, curveEnds, splineToBeziers } from './geom2d.js';
+import { curvePolyline, curvePolylines, curvePieces, intersect, closest, dist, sub, add, mul, norm, perp, polar, angleOf, TAU, derivAt, evalAt, curveEnds, splineToBeziers } from './geom2d.js';
 import { arcFrom3, FreehandCapture } from './freehand.js';
 import { fmtLen, fmtAngle } from '../util/units.js';
 import { uid } from '../util/misc.js';
@@ -29,10 +29,11 @@ export class PreviewLines {
   set(frame, curves) {
     const arr = [];
     for (const c of curves) {
-      const pl = c.t === 'point' ? [] : curvePolyline(c);
-      for (let i = 0; i < pl.length - 1; i++) {
-        const a = toWorld(frame, pl[i]), b = toWorld(frame, pl[i + 1]);
-        arr.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      for (const pl of curvePolylines(c)) {
+        for (let i = 0; i < pl.length - 1; i++) {
+          const a = toWorld(frame, pl[i]), b = toWorld(frame, pl[i + 1]);
+          arr.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        }
       }
     }
     this.line.visible = arr.length > 0;
@@ -801,6 +802,7 @@ export class TrimTool extends DrawTool {
 
 /** Görbe egy szakaszának eltávolítása a legközelebbi metszéspontok között. */
 export function trimCurve(sketch, c, at) {
+  if (c.t === 'text' || c.t === 'point') return null; // szöveget nem vágunk
   const others = sketch.curves.filter((x) => x.id !== c.id && x.t !== 'point' && !x.construction);
   const pieces = curvePieces(c);
   if (!pieces.length) return null;
@@ -1001,9 +1003,12 @@ export class SketchPaletteTool extends LineTool {
       ['tangentArc', 'arcTangent', 'Érintő ív'], ['rectCenter', 'rectCenter', 'Téglalap középről'], ['polygon', 'polygon', 'Sokszög'],
       ['slot', 'slot', 'Hosszlyuk'], ['point', 'point', 'Pont'], ['freehand', 'freehand', 'Szabadkézi (alakfelismerés)'],
       ['sketchFillet', 'sketchFillet', 'Sarok lekerekítés'], ['offsetCurve', 'offsetCurve', 'Görbe eltolás (kijelöltek)'],
+      ['text', 'text', 'Szöveg'],
     ];
     const moreActive = more.some((m) => m[0] === cur);
     const selCount = app.sel.filter((s) => s.type === 'curve' || s.type === 'spoint' || s.type === 'region').length;
+    const selCurves = app.sel.filter((s) => s.type === 'curve');
+    const txt = selCurves.length === 1 && (() => { const sk = app.doc.sketch(selCurves[0].sketchId); const c = sk && sk.curves.find((x) => x.id === selCurves[0].curveId); return c && c.t === 'text'; })() ? selCurves[0] : null;
     return [
       { icon: 'close', label: 'Vázlatból kilépés', sub: name, onTap: () => app.exitSketchMode() },
       '-',
@@ -1017,6 +1022,7 @@ export class SketchPaletteTool extends LineTool {
       '-',
       B('trim', 'trim', 'Vágás', { kbd: 'T' }),
       { icon: 'trash', label: 'Törlés', disabled: !selCount, onTap: () => app.deleteSelection() },
+      ...(txt ? [{ icon: 'text', label: 'Szöveg szerk.', onTap: () => import('./texttool.js').then((m) => m.editTextCurve(app, txt.sketchId, txt.curveId)) }] : []),
       { icon: 'construction', label: 'Segédvonal', sub: app.sketchConstruction ? 'Be' : 'Ki', active: !!app.sketchConstruction, onTap: () => { app.sketchConstruction = !app.sketchConstruction; app.updateToolbar(); app.tool && app.tool.refreshPanel && app.tool.refreshPanel(); } },
     ];
   }
