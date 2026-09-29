@@ -85,7 +85,13 @@ export class FreehandCapture {
     if (!curves.length) return;
     const names = { line: 'Vonal', circle: 'Kör', arc: 'Ív', spline: 'Spline' };
     const label = res.label || names[curves[0].t] || 'Vázlat';
-    this.app.addCurves(this.frame, curves, label, 'freehand');
+    const cons = [];
+    curves.forEach((c, i) => {
+      if (c.t !== 'line') return;
+      if (Math.abs(c.a[1] - c.b[1]) < 1e-9) cons.push({ type: 'horizontal', a: { curve: '#' + i } });
+      else if (Math.abs(c.a[0] - c.b[0]) < 1e-9) cons.push({ type: 'vertical', a: { curve: '#' + i } });
+    });
+    this.app.addCurves(this.frame, curves, label, 'freehand', cons);
   }
 
   /** Firkálás: a firka által érintett görbék törlése. */

@@ -4,8 +4,9 @@ import { el, onTap, shareOrDownload, pickFile, safeName, uid } from '../util/mis
 import { icon } from './icons.js';
 import { BODY_COLORS, newBodyId } from '../doc/document.js';
 import { canonicalFrame, planeFromJSON } from '../sketch/manager.js';
-import { fmtLen, fmtVolume, fmtArea, fmtMass, getUnit, LENGTH_UNITS } from '../util/units.js';
+import { fmtLen, fmtVolume, fmtArea, fmtMass, getUnit, LENGTH_UNITS, evalVariables, fmtVar, isValidVarName } from '../util/units.js';
 import { curveEnds } from '../sketch/geom2d.js';
+import { MATERIALS, MATERIAL_GROUPS, materialById, swatchCSS, createMaterial, ensureBoxUV } from '../view/materials.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 
@@ -45,6 +46,8 @@ export function displayMenu(app, anchor) {
     { sep: true },
     { icon: 'sphere', label: 'Árnyékok', checked: app.settings.shadows, onTap: () => app.setSetting('shadows', !app.settings.shadows) },
     { icon: 'plane', label: 'Rács', checked: app.vp.gridVisible, onTap: () => { app.vp.gridVisible = !app.vp.gridVisible; app.vp.requestRender(); } },
+    { icon: 'palette', label: 'Anyagok modellezéskor is', checked: !!app.settings.materialsInModel, onTap: () => { app.setSetting('materialsInModel', !app.settings.materialsInModel); app._syncScene(false); } },
+    { icon: 'dimension', label: 'Vázlatméretek', checked: app.settings.showDims !== false, onTap: () => { app.setSetting('showDims', app.settings.showDims === false); app.annotations.refresh(); } },
   ], { side: 'left' });
 }
 
@@ -68,6 +71,7 @@ export function projectMenu(app, anchor) {
     { icon: 'image', label: 'Referencia kép beszúrása', onTap: () => insertImage(app) },
     { icon: 'share', label: 'Projektfájl mentése (.warazslo)', onTap: () => exportProjectFile(app) },
     { sep: true },
+    { icon: 'variables', label: 'Változók', onTap: () => openVariables(app) },
     { icon: 'info', label: 'Tömeg és térfogat', onTap: () => showProperties(app) },
     { icon: 'settings', label: 'Beállítások', onTap: () => openSettings(app) },
     { icon: 'keyboard', label: 'Gesztusok és billentyűk', onTap: () => showHelp(app) },
@@ -83,19 +87,174 @@ function targetBodies(app, selectionOnly) {
   return bodies;
 }
 
+const EXPORT_FORMATS = [
+  ['step', 'STEP', 'CAD csere (SolidWorks, Fusion, NX, CNC/CAM)', 'cube'],
+  ['stl', 'STL', '3D nyomtatás', 'cube'],
+  ['3mf', '3MF', '3D nyomtatás színekkel (Bambu, Prusa, Orca)', 'cube'],
+  ['obj', 'OBJ', 'Háló (grafika)', 'cube'],
+  ['glb', 'GLB', '3D web / AR (glTF)', 'ar'],
+  ['usdz', 'USDZ', 'AR nézet iPaden / iPhone-on', 'ar'],
+  ['html', 'HTML nézet', 'Megosztható 3D nézet böngészőben', 'share'],
+  ['brep', 'BREP', 'OpenCascade natív', 'cube'],
+  ['drawing', 'Műszaki rajz', 'PDF / SVG / DXF', 'drawing'],
+  ['png', 'Kép', 'PNG képernyőkép', 'camera'],
+];
+const QUALITY = { base: [0.05, 0.25, 'Alap'], high: [0.01, 0.1, 'Magas'], ultra: [0.003, 0.05, 'Nagyon magas'] };
+
+/** Export párbeszéd (formátum, hatókör, minőség, egység, külön fájlok). */
 export function exportMenu(app, anchor, selectionOnly) {
-  const bodies = targetBodies(app, selectionOnly);
-  const what = selectionOnly && app.sel.some((s) => s.bodyId) ? 'kijelölt' : 'látható';
-  app.ui.menu(anchor, [
-    { head: `Exportálás (${bodies.length} ${what} test)` },
-    { icon: 'cube', label: 'STEP (.step)', sc: 'CAD csere', onTap: () => exportBodies(app, bodies, 'step') },
-    { icon: 'cube', label: 'STL (.stl)', sc: '3D nyomtatás', onTap: () => exportBodies(app, bodies, 'stl') },
-    { icon: 'cube', label: 'STL finom (.stl)', sc: 'nagy felbontás', onTap: () => exportBodies(app, bodies, 'stl', 0.003) },
-    { icon: 'cube', label: 'OBJ (.obj)', onTap: () => exportOBJ(app, bodies) },
-    { icon: 'ar', label: 'USDZ (AR nézet)', sc: 'iPad AR', onTap: () => exportUSDZ(app, bodies) },
-    { icon: 'drawing', label: 'Műszaki rajz (SVG/PDF)', onTap: () => openDrawing(app) },
-    { icon: 'camera', label: 'Kép (.png)', onTap: () => screenshot(app) },
-  ], { side: anchor.closest && anchor.closest('#topbar') ? 'below' : 'right' });
+  const hasSel = app.sel.some((s) => s.bodyId);
+  const o = { fmt: app._exportFmt || 'step', scope: selectionOnly && hasSel ? 'sel' : 'visible', quality: app._exportQ || 'high', unit: 'mm', separate: false };
+  const body = el('div');
+  const render = () => {
+    body.innerHTML = '';
+    const chips = (key, opts) => {
+      const c = el('div', { class: 'chips', style: { marginBottom: '10px', flexWrap: 'wrap' } });
+      for (const [v, l] of opts) {
+        const b = el('button', { class: `chip ${o[key] === v ? 'on' : ''}`, text: l });
+        onTap(b, () => { o[key] = v; render(); });
+        c.append(b);
+      }
+      return c;
+    };
+    const grid = el('div', { class: 'opt-grid', style: { marginBottom: '12px' } });
+    for (const [id, name, desc, ic] of EXPORT_FORMATS) {
+      const x = el('div', { class: `opt ${o.fmt === id ? 'on' : ''}`, html: `${icon(ic)}<b>${name}</b><small style="color:var(--text-dim)">${desc}</small>` });
+      onTap(x, () => { o.fmt = id; render(); });
+      grid.append(x);
+    }
+    body.append(grid);
+    const meshFmt = ['stl', '3mf', 'obj', 'glb', 'html', 'usdz'].includes(o.fmt);
+    if (!['png', 'drawing'].includes(o.fmt)) body.append(chips('scope', [...(hasSel ? [['sel', 'Kijelölt testek']] : []), ['visible', 'Látható testek'], ['all', 'Minden test']]));
+    if (meshFmt) body.append(chips('quality', Object.entries(QUALITY).map(([k, v]) => [k, `${v[2]} felbontás`])));
+    if (['step', 'stl', '3mf', 'obj'].includes(o.fmt)) body.append(chips('unit', [['mm', 'Milliméter'], ['in', 'Hüvelyk']]));
+    if (['step', 'stl', '3mf', 'obj'].includes(o.fmt)) {
+      const t = el('div', { class: `toggle ${o.separate ? 'on' : ''}` }, el('span', { class: 'sw' }), el('span', { text: 'Testenként külön fájl (ZIP)' }));
+      onTap(t, () => { o.separate = !o.separate; render(); });
+      body.append(t);
+    }
+  };
+  render();
+  app.ui.dialog({
+    title: 'Exportálás', body,
+    buttons: [{ label: 'Mégse', value: null, style: 'ghost' }, { label: 'Exportálás', value: () => ({ ...o }), style: 'primary' }],
+  }).then((res) => {
+    if (!res) return;
+    app._exportFmt = res.fmt; app._exportQ = res.quality;
+    runExport(app, res);
+  });
+}
+
+function scopeBodies(app, scope) {
+  const st = app.doc.state;
+  if (scope === 'sel') { const ids = new Set(app.sel.filter((s) => s.bodyId).map((s) => s.bodyId)); return st.bodies.filter((b) => ids.has(b.id)); }
+  if (scope === 'all') return st.bodies;
+  return st.bodies.filter((b) => !app.doc.isHidden(b.id));
+}
+
+async function runExport(app, o) {
+  if (o.fmt === 'png') return screenshot(app);
+  if (o.fmt === 'drawing') return openDrawing(app);
+  const bodies = scopeBodies(app, o.scope);
+  if (!bodies.length) { app.ui.toast('Nincs exportálható test', 'error'); return; }
+  const name = bodies.length === 1 ? bodies[0].name : app.doc.name;
+  const [tol, ang] = QUALITY[o.quality] || QUALITY.high;
+  const scale = o.unit === 'in' ? 1 / 25.4 : 1;
+  try {
+    app.ui.toast('Exportálás…', '', 1500);
+    const E = await import('../util/export3d.js');
+    const meshesOf = async (list) => {
+      const r = await app.kernel.query('exportMesh', { bodies: list.map((b) => ({ id: b.id, rev: b.rev })), tolerance: tol, angularTolerance: ang });
+      return r.map((m, i) => ({ body: list[i], ...m }));
+    };
+    const single = async (list, fname) => {
+      switch (o.fmt) {
+        case 'step': return { name: `${fname}.step`, data: await app.kernel.query('exportFile', { format: 'step', bodies: list.map((b) => ({ id: b.id, rev: b.rev })), names: list.map((b) => b.name), colors: list.map((b) => b.color), unit: o.unit === 'in' ? 'INCH' : 'MM' }) };
+        case 'brep': return { name: `${fname}.brep`, data: await app.kernel.query('exportFile', { format: 'brep', bodies: list.map((b) => ({ id: b.id, rev: b.rev })) }) };
+        case 'stl': return { name: `${fname}.stl`, data: stlBinary(await meshesOf(list), scale) };
+        case '3mf': {
+          const ms = await meshesOf(list);
+          const items = ms.map((m) => { const w = E.weld(m.vertices, m.triangles); return { name: m.body.name, color: materialColor(m.body), positions: w.positions, indices: w.indices }; });
+          return { name: `${fname}.3mf`, data: E.build3MF(items, { unit: o.unit === 'in' ? 'inch' : 'millimeter', scale }) };
+        }
+        case 'obj': return { name: `${fname}.obj`, data: objText(await meshesOf(list), scale, E) };
+        case 'glb': case 'html': {
+          const ms = await meshesOf(list);
+          const glb = await E.buildGLB(ms.map((m) => ({ name: m.body.name, positions: m.vertices, normals: m.normals, indices: m.triangles, material: bodyThreeMaterial(m.body) })));
+          if (o.fmt === 'glb') return { name: `${fname}.glb`, data: glb };
+          return { name: `${fname}.html`, data: new TextEncoder().encode(E.buildViewerHTML(glb, fname)), type: 'text/html' };
+        }
+        case 'usdz': await exportUSDZ(app, list); return null;
+        default: return null;
+      }
+    };
+    if (o.separate && bodies.length > 1 && ['step', 'stl', '3mf', 'obj'].includes(o.fmt)) {
+      const { zipSync } = await import('three/addons/libs/fflate.module.js');
+      const files = {};
+      for (const b of bodies) {
+        const f = await single([b], safeName(b.name));
+        let n = f.name, k = 2;
+        while (files[n]) n = f.name.replace(/(\.\w+)$/, ` (${k++})$1`);
+        files[n] = new Uint8Array(f.data);
+      }
+      await shareOrDownload(new Blob([zipSync(files)], { type: 'application/zip' }), `${safeName(app.doc.name)}_${o.fmt}.zip`);
+      return;
+    }
+    const f = await single(bodies, safeName(name));
+    if (f) await shareOrDownload(new Blob([f.data], { type: f.type || 'application/octet-stream' }), f.name);
+  } catch (e) {
+    app.ui.toast(`Export hiba: ${e.message}`, 'error', 5000);
+  }
+}
+
+function materialColor(b) {
+  const m = b.material ? materialById(b.material) : null;
+  return m ? m.color : b.color;
+}
+
+function bodyThreeMaterial(b) {
+  const def = b.material ? materialById(b.material) : null;
+  if (def && !def.tex) return createMaterial(def);
+  return new THREE.MeshStandardMaterial({ color: def ? def.color : b.color, roughness: def ? def.roughness : 0.5, metalness: def ? def.metalness : 0.05 });
+}
+
+function stlBinary(meshes, scale) {
+  let n = 0;
+  for (const m of meshes) n += m.triangles.length / 3;
+  const buf = new ArrayBuffer(84 + n * 50);
+  const dv = new DataView(buf);
+  const head = 'Warazslo STL';
+  for (let i = 0; i < head.length; i++) dv.setUint8(i, head.charCodeAt(i));
+  dv.setUint32(80, n, true);
+  let o = 84;
+  for (const m of meshes) {
+    const v = m.vertices, t = m.triangles;
+    for (let i = 0; i < t.length; i += 3) {
+      const a = t[i] * 3, b = t[i + 1] * 3, c = t[i + 2] * 3;
+      const ux = v[b] - v[a], uy = v[b + 1] - v[a + 1], uz = v[b + 2] - v[a + 2];
+      const wx = v[c] - v[a], wy = v[c + 1] - v[a + 1], wz = v[c + 2] - v[a + 2];
+      let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      const l = Math.hypot(nx, ny, nz) || 1;
+      dv.setFloat32(o, nx / l, true); dv.setFloat32(o + 4, ny / l, true); dv.setFloat32(o + 8, nz / l, true);
+      o += 12;
+      for (const k of [a, b, c]) { dv.setFloat32(o, v[k] * scale, true); dv.setFloat32(o + 4, v[k + 1] * scale, true); dv.setFloat32(o + 8, v[k + 2] * scale, true); o += 12; }
+      dv.setUint16(o, 0, true); o += 2;
+    }
+  }
+  return buf;
+}
+
+function objText(meshes, scale, E) {
+  let out = '# Warázsló\n';
+  let base = 1;
+  for (const m of meshes) {
+    const w = E.weld(m.vertices, m.triangles);
+    out += `o ${m.body.name.replace(/\s+/g, '_')}\n`;
+    for (let i = 0; i < w.positions.length; i += 3) out += `v ${(w.positions[i] * scale).toFixed(5)} ${(w.positions[i + 1] * scale).toFixed(5)} ${(w.positions[i + 2] * scale).toFixed(5)}\n`;
+    for (let i = 0; i < w.indices.length; i += 3) out += `f ${w.indices[i] + base} ${w.indices[i + 1] + base} ${w.indices[i + 2] + base}\n`;
+    base += w.positions.length / 3;
+  }
+  return new TextEncoder().encode(out);
 }
 
 async function exportBodies(app, bodies, format, tolerance) {
@@ -150,7 +309,10 @@ async function exportUSDZ(app, bodies) {
       g.setAttribute('position', new THREE.BufferAttribute(m.vertices, 3));
       g.setAttribute('normal', new THREE.BufferAttribute(m.normals, 3));
       g.setIndex(new THREE.BufferAttribute(m.triangles, 1));
-      root.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: b.color, roughness: 0.5, metalness: 0.05 })));
+      const def = b.material ? materialById(b.material) : null;
+      let mat = new THREE.MeshStandardMaterial({ color: b.color, roughness: 0.5, metalness: 0.05 });
+      if (def) { mat = createMaterial(def); if (mat.userData.needsUV) ensureBoxUV(g, mat.userData.texScale); }
+      root.add(new THREE.Mesh(g, mat));
     }
     const exporter = new USDZExporter();
     const data = await exporter.parseAsync(scene);
@@ -223,7 +385,7 @@ export function colorMenu(app, anchor) {
   const close = () => { scrim.remove(); m.remove(); };
   scrim.addEventListener('pointerdown', close);
   document.body.append(scrim, m);
-  const r = anchor.getBoundingClientRect();
+  const r = anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { right: anchor.x, top: anchor.y };
   m.style.left = `${Math.min(window.innerWidth - m.offsetWidth - 8, r.right + 8)}px`;
   m.style.top = `${Math.min(window.innerHeight - m.offsetHeight - 8, r.top)}px`;
 }
@@ -270,7 +432,7 @@ export function editDimension(app) {
   const sk = app.doc.sketch(s.sketchId);
   const c = sk && sk.curves.find((x) => x.id === s.curveId);
   if (!c) return;
-  import('../sketch/edit.js').then(({ editCurveDimension }) => editCurveDimension(app, sk, c));
+  import('../sketch/annotate.js').then(({ addDefaultDimension }) => addDefaultDimension(app));
 }
 
 // ---------------------------------------------------------------- elemek lap
@@ -399,20 +561,21 @@ export async function showProperties(app) {
   if (!bodies.length) { app.ui.toast('Nincs test', '', 1500); return; }
   try {
     const props = await app.kernel.query('properties', { bodies: bodies.map((b) => ({ id: b.id, rev: b.rev })) });
-    const dens = app.settings.density || 1.24;
     const box = el('div');
-    let tv = 0, ta = 0;
+    let tv = 0, ta = 0, tm = 0;
     props.forEach((p, i) => {
-      tv += p.volume; ta += p.area;
+      const dens = bodyDensity(app, bodies[i]);
+      const mat = bodies[i].material ? materialById(bodies[i].material) : null;
+      tv += p.volume; ta += p.area; tm += (p.volume / 1000) * dens;
       const bb = p.bbox;
       box.append(el('div', { class: 'measure-card', style: { marginBottom: '10px' } },
         el('div', { style: { fontWeight: 650, marginBottom: '4px' }, text: bodies[i].name }),
         mrow('Térfogat', fmtVolume(p.volume)), mrow('Felület', fmtArea(p.area)),
-        mrow(`Tömeg (${app.settings.material || 'anyag'}, ${String(dens).replace('.', ',')} g/cm³)`, fmtMass((p.volume / 1000) * dens)),
+        mrow(`Tömeg (${mat ? mat.name : app.settings.material || 'anyag'}, ${String(dens).replace('.', ',')} g/cm³)`, fmtMass((p.volume / 1000) * dens)),
         mrow('Befoglaló méret', `${fmtLen(bb[3] - bb[0], { unit: false })} × ${fmtLen(bb[4] - bb[1], { unit: false })} × ${fmtLen(bb[5] - bb[2])}`),
         mrow('Súlypont', p.center.map((x) => fmtLen(x, { unit: false })).join('; '))));
     });
-    if (props.length > 1) box.append(el('div', { class: 'measure-card' }, mrow('Összes térfogat', fmtVolume(tv)), mrow('Összes tömeg', fmtMass((tv / 1000) * dens))));
+    if (props.length > 1) box.append(el('div', { class: 'measure-card' }, mrow('Összes térfogat', fmtVolume(tv)), mrow('Összes tömeg', fmtMass(tm))));
     await app.ui.dialog({ title: 'Tömegtulajdonságok', body: box, buttons: [{ label: 'Bezárás', value: true, style: 'primary' }] });
   } catch (e) { app.ui.toast(e.message, 'error'); }
 }
@@ -420,7 +583,7 @@ export async function showProperties(app) {
 const mrow = (k, v) => el('div', { class: 'mrow' }, el('span', { text: k }), el('b', { text: v }));
 
 // ---------------------------------------------------------------- beállítások
-const MATERIALS = [['PLA', 1.24], ['PETG', 1.27], ['ABS', 1.04], ['Nylon', 1.14], ['Alumínium', 2.7], ['Acél', 7.85], ['Sárgaréz', 8.5], ['Fa (fenyő)', 0.5]];
+const DEFAULT_DENSITIES = [['PLA', 1.24], ['PETG', 1.27], ['ABS', 1.04], ['Nylon', 1.14], ['Alumínium', 2.7], ['Acél', 7.85], ['Sárgaréz', 8.5], ['Fa (fenyő)', 0.5]];
 
 export function openSettings(app) {
   app.ui.openSheet({
@@ -454,7 +617,7 @@ export function openSettings(app) {
       body.append(toggle('perspective', 'Perspektivikus nézet', 'Kikapcsolva ortografikus'));
       body.append(el('div', { class: 'list-head', text: 'Anyag (tömegszámításhoz)' }));
       const mc = el('div', { class: 'opt-grid', style: { padding: '4px 16px 12px' } });
-      for (const [name, d] of MATERIALS) {
+      for (const [name, d] of DEFAULT_DENSITIES) {
         const o = el('div', { class: `opt ${s.material === name ? 'on' : ''}` }, el('div', { text: name }), el('small', { text: `${String(d).replace('.', ',')} g/cm³`, style: { color: 'var(--text-dim)' } }));
         onTap(o, () => { app.setSetting('material', name); app.setSetting('density', d); app.ui.refreshSheet(); });
         mc.append(o);
@@ -493,3 +656,140 @@ export async function openDrawing(app) {
 }
 
 export { curveEnds, newBodyId, LENGTH_UNITS, getUnit };
+
+// ---------------------------------------------------------------- változók
+export function openVariables(app) {
+  if (app.ui.sheetOpen('Változók')) { app.ui.closeSheet(); return; }
+  let draft = (app.doc.state.variables || []).map((v) => ({ ...v }));
+  const apply = () => {
+    const bad = draft.find((v) => v.name && !isValidVarName(v.name));
+    if (bad) { app.ui.toast(`Érvénytelen név: ${bad.name}`, 'error'); return; }
+    const names = draft.filter((v) => v.name).map((v) => v.name.toLowerCase());
+    if (new Set(names).size !== names.length) { app.ui.toast('Két változónak nem lehet azonos a neve', 'error'); return; }
+    app.setVariables(draft.filter((v) => v.name && String(v.expr).trim()));
+  };
+  app.ui.openSheet({
+    title: 'Változók', side: 'right',
+    build: (body) => {
+      const { map, errors } = evalVariables(draft.filter((v) => v.name));
+      body.append(el('div', { class: 'list-head', text: 'Név · kifejezés · érték' }));
+      body.append(el('div', { class: 'set-row', html: '<div class="sl"><small>Méreteknél és minden számmezőben használhatók, pl. <b>D/2</b>, <b>3*D + 5mm</b>. A változó módosításakor a vázlatok és a hozzájuk kötött lépések újraszámolódnak.</small></div>' }));
+      draft.forEach((v, i) => {
+        const name = el('input', { type: 'text', value: v.name, placeholder: 'D', autocapitalize: 'off', autocomplete: 'off', spellcheck: 'false' });
+        const expr = el('input', { type: 'text', value: v.expr, placeholder: '20 mm', autocapitalize: 'off', autocomplete: 'off', spellcheck: 'false' });
+        const val = map.get((v.name || '').toLowerCase());
+        const vEl = el('span', { class: `val ${errors.has(v.name) ? 'err' : ''}`, text: errors.has(v.name) ? '!' : fmtVar(val) });
+        const del = el('button', { class: 'act', html: icon('trash') });
+        name.addEventListener('change', () => { draft[i].name = name.value.trim(); app.ui.refreshSheet(); });
+        expr.addEventListener('change', () => { draft[i].expr = expr.value.trim(); app.ui.refreshSheet(); });
+        onTap(del, () => { draft.splice(i, 1); app.ui.refreshSheet(); });
+        body.append(el('div', { class: 'var-row' }, name, expr, vEl, del));
+      });
+      const add = el('button', { class: 'btn', html: `${icon('plus')}<span>Új változó</span>`, style: { margin: '10px 12px' } });
+      onTap(add, () => { let n = 1; while (draft.some((v) => v.name === `V${n}`)) n++; draft.push({ name: `V${n}`, expr: '10 mm' }); app.ui.refreshSheet(); });
+      body.append(add);
+    },
+    foot: (f) => {
+      const ok = el('button', { class: 'btn primary', html: `${icon('check')}<span>Alkalmaz</span>` });
+      onTap(ok, apply);
+      f.append(ok);
+    },
+  });
+}
+
+// ---------------------------------------------------------------- helyzetmenü (hosszú nyomás)
+export function contextMenu(app, it, at) {
+  const doc = app.doc;
+  const items = [];
+  if (it && it.bodyId) {
+    const b = doc.body(it.bodyId);
+    app.setSelection([{ type: 'body', bodyId: it.bodyId }]);
+    items.push({ head: b ? b.name : 'Test' });
+    if (app.mode !== 'view') {
+      items.push({ icon: 'move', label: 'Mozgatás / forgatás', onTap: () => app.startTool('move') });
+      items.push({ icon: 'copy', label: 'Másolat', onTap: () => duplicateBodies(app) });
+      items.push({ icon: 'palette', label: 'Anyag és szín', onTap: () => materialSheet(app, [it.bodyId]) });
+    }
+    items.push({ icon: 'eyeOff', label: 'Elrejtés', onTap: () => { doc.setHidden(it.bodyId, true); app.clearSelection(); } });
+    items.push({ icon: 'isolate', label: 'Izolálás', onTap: () => app.setIsolation(new Set([it.bodyId])) });
+    items.push({ icon: 'info', label: 'Tömeg és térfogat', onTap: () => showProperties(app) });
+    items.push({ icon: 'exportFile', label: 'Exportálás…', onTap: () => exportMenu(app, at, true) });
+    if (app.mode !== 'view') items.push({ sep: true }, { icon: 'trash', label: 'Törlés', danger: true, onTap: () => app.deleteSelection() });
+  } else if (it && it.sketchId) {
+    const sk = doc.sketch(it.sketchId);
+    items.push({ head: sk ? sk.name : 'Vázlat' });
+    if (app.mode !== 'view') items.push({ icon: 'sketch', label: 'Vázlat szerkesztése', onTap: () => app.enterSketchMode(planeFromJSON(sk.plane)) });
+    items.push({ icon: 'items', label: 'Teljes vázlat kijelölése', onTap: () => app.setSelection([{ type: 'sketch', sketchId: it.sketchId }]) });
+    items.push({ icon: 'eyeOff', label: 'Elrejtés', onTap: () => { doc.setHidden(it.sketchId, true); app.clearSelection(); } });
+    if (app.mode !== 'view') items.push({ sep: true }, { icon: 'trash', label: 'Vázlat törlése', danger: true, onTap: () => { app.setSelection([{ type: 'sketch', sketchId: it.sketchId }]); app.deleteSelection(); } });
+  } else if (it && it.type === 'plane') {
+    const p = doc.plane(it.planeId);
+    items.push({ head: p ? p.name : 'Sík' });
+    items.push({ icon: 'sketch', label: 'Vázlat a síkon', onTap: () => app.enterSketchMode(planeFromJSON(p)) });
+    items.push({ icon: 'eyeOff', label: 'Elrejtés', onTap: () => doc.setHidden(it.planeId, true) });
+    items.push({ icon: 'trash', label: 'Törlés', danger: true, onTap: () => { app.setSelection([{ type: 'plane', planeId: it.planeId }]); app.deleteSelection(); } });
+  } else {
+    if (app.mode !== 'view') {
+      items.push({ icon: 'sketch', label: 'Vázlat a rácssíkon', onTap: () => app.enterSketchMode(app.vp.gridFrame) });
+      items.push({ icon: 'box', label: 'Doboz beszúrása', onTap: () => app.startTool('primitive', { type: 'box' }) });
+    }
+    items.push({ icon: 'fit', label: 'Minden látszódjon', onTap: () => app.vp.fitBox(app.bodies.bounds()) });
+    const hidden = doc.view.hidden || [];
+    if (hidden.length) items.push({ icon: 'eye', label: `Rejtettek megjelenítése (${hidden.length})`, onTap: () => doc.setViewProp('hidden', []) });
+    if (app.isolated) items.push({ icon: 'isolate', label: 'Izolálás vége', onTap: () => app.setIsolation(null) });
+  }
+  app.ui.menu(at, items, { side: 'right' });
+}
+
+// ---------------------------------------------------------------- anyag és szín
+export function materialSheet(app, ids) {
+  ids = ids && ids.length ? ids : [...new Set(app.sel.filter((s) => s.bodyId).map((s) => s.bodyId))];
+  if (!ids.length) { app.ui.toast('Jelölj ki egy testet', '', 1500); return; }
+  let group = app._matGroup || MATERIAL_GROUPS[0];
+  const cur = () => { const b = app.doc.body(ids[0]); return b ? b.material || null : null; };
+  app.ui.openSheet({
+    title: 'Anyag és szín', side: 'right',
+    build: (body) => {
+      body.append(el('div', { class: 'list-head', text: 'Modellező szín' }));
+      const cr = el('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px', padding: '4px 14px 10px' } });
+      for (const c of [...BODY_COLORS, '#8e8e98', '#3a3a44', '#f2f2f2', '#e8d36a', '#e07b39', '#d9534f', '#5cb85c', '#337ab7']) {
+        const b = el('button', { style: { width: '34px', height: '34px', borderRadius: '10px', border: '2px solid rgba(255,255,255,.2)', background: c, cursor: 'pointer' } });
+        onTap(b, () => setBodyColor(app, ids, c));
+        cr.append(b);
+      }
+      body.append(cr);
+      body.append(el('div', { class: 'list-head', text: `Anyag (${MATERIALS.length}) – a Nézet módban látszik` }));
+      const chips = el('div', { class: 'chips', style: { flexWrap: 'wrap', margin: '0 12px 8px' } });
+      for (const gname of MATERIAL_GROUPS) {
+        const b = el('button', { class: `chip ${gname === group ? 'on' : ''}`, text: gname });
+        onTap(b, () => { group = gname; app._matGroup = gname; app.ui.refreshSheet(); });
+        chips.append(b);
+      }
+      body.append(chips);
+      const grid = el('div', { class: 'opt-grid', style: { padding: '4px 12px 14px' } });
+      const none = el('div', { class: `opt ${!cur() ? 'on' : ''}` }, el('div', { style: { width: '44px', height: '44px', borderRadius: '50%', border: '2px dashed var(--line-2)' } }), el('div', { text: 'Nincs anyag' }));
+      onTap(none, () => setBodyMaterial(app, ids, null));
+      grid.append(none);
+      for (const m of MATERIALS.filter((x) => x.group === group)) {
+        const o = el('div', { class: `opt ${cur() === m.id ? 'on' : ''}` },
+          el('div', { style: { width: '44px', height: '44px', borderRadius: '50%', background: swatchCSS(m), boxShadow: 'inset 0 -2px 6px rgba(0,0,0,.35)' } }),
+          el('div', { text: m.name }), el('small', { text: `${String(m.density).replace('.', ',')} g/cm³`, style: { color: 'var(--text-dim)' } }));
+        onTap(o, () => setBodyMaterial(app, ids, m.id));
+        grid.append(o);
+      }
+      body.append(grid);
+    },
+  });
+}
+
+export function setBodyMaterial(app, ids, matId) {
+  const st = app.doc.state;
+  const m = matId ? materialById(matId) : null;
+  app.doc.commit(m ? `Anyag: ${m.name}` : 'Anyag törlése', { ...st, bodies: st.bodies.map((b) => (ids.includes(b.id) ? { ...b, material: matId || undefined } : b)) }, { icon: 'palette' });
+  if (m && app.mode !== 'view' && !app.settings.materialsInModel) app.ui.toast('Az anyag a Nézet módban (V) látszik', '', 2200);
+}
+
+export function bodyDensity(app, b) {
+  const m = b && b.material ? materialById(b.material) : null;
+  return m ? m.density : app.settings.density || 1.24;
+}

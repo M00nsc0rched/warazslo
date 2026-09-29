@@ -55,6 +55,30 @@ export class ViewCube {
     viewport.on('afterRender', () => this.render());
   }
 
+  /** A nézetkocka helye + 90°-os forgató gombok. */
+  attach(slot) {
+    this.slot = slot;
+    const mk = (sym, sign, pos) => {
+      const b = document.createElement("button");
+      b.className = `cube-rot ${pos}`;
+      b.textContent = sym;
+      b.title = sign > 0 ? "Forgatás 90° jobbra" : "Forgatás 90° balra";
+      b.addEventListener("pointerup", (e) => { e.stopPropagation(); this.rotate90(sign); });
+      b.addEventListener("pointerdown", (e) => e.stopPropagation());
+      slot.append(b);
+    };
+    mk("↺", -1, "left");
+    mk("↻", 1, "right");
+  }
+
+  /** A nézet elforgatása 90°-kal a nézési tengely körül (animálva). */
+  rotate90(sign) {
+    const vp = this.vp;
+    const R = new THREE.Quaternion().setFromAxisAngle(vp.viewDir, -sign * Math.PI / 2);
+    const target = (vp._anim ? vp._anim.to.quat.clone() : vp.quat.clone()).premultiply(R);
+    vp.animateTo({ quat: target });
+  }
+
   rect() {
     const r = this.slot.getBoundingClientRect();
     const c = this.vp.rect || this.vp.canvas.getBoundingClientRect();
@@ -116,6 +140,15 @@ export class ViewCube {
 
   /** Koppintás a kockán: a nézet átfordul. */
   tap(x, y) {
+    const now = performance.now();
+    if (this._lastTap && now - this._lastTap < 320) {
+      // dupla koppintás: alapnézet (izometrikus) és minden látszik
+      this._lastTap = 0;
+      this.vp.setViewDirection(new THREE.Vector3(1, -1.35, 0.95), true);
+      if (this.onHome) this.onHome();
+      return null;
+    }
+    this._lastTap = now;
     const d = this.hitDirection(x, y);
     if (!d) return null;
     // felül/alul nézetben a képernyő felfelé iránya +Y, egyébként +Z

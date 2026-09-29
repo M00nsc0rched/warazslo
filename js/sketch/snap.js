@@ -97,9 +97,9 @@ export function snap(app, frame, uv, ev, opts = {}) {
     let bc = null;
     for (const c of curvesOnPlane) {
       const r = curveDistance(c, uv);
-      if (r.d < tol * 0.8 && (!bc || r.d < bc.d)) bc = r;
+      if (r.d < tol * 0.8 && (!bc || r.d < bc.d)) bc = { ...r, curveId: c.id };
     }
-    if (bc) return { p: bc.point, kind: 'curve', guides: [] };
+    if (bc) return { p: bc.point, kind: "curve", curveId: bc.curveId, guides: [] };
   }
   if (aligned) return { p, kind: 'align', guides };
 

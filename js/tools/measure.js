@@ -8,6 +8,8 @@ import { faceInfo, edgeInfo, refOf, V3 } from './common.js';
 import { fmtLen, fmtAngle, fmtArea, fmtVolume, fmtMass } from '../util/units.js';
 import { curvePolyline, dist } from '../sketch/geom2d.js';
 import { planeFromJSON, toWorld } from '../sketch/manager.js';
+import { bodyDensity } from '../ui/sheets.js';
+import { materialById } from '../view/materials.js';
 
 const NAMES = { face: 'Lap', edge: 'Él', vertex: 'Csúcs', body: 'Test', region: 'Régió', curve: 'Görbe', spoint: 'Pont' };
 const SURF = { PLANE: 'sík', CYLINDRE: 'henger', CONE: 'kúp', SPHERE: 'gömb', TORUS: 'tórusz', BSPLINE_SURFACE: 'szabadformájú', REVOLUTION: 'forgási' };
@@ -81,8 +83,10 @@ export class MeasureTool extends Tool {
       const v = g && g.data.volume;
       if (v) {
         rows.push(['Térfogat', fmtVolume(v)]);
-        const dens = this.app.settings.density || 1.24;
-        rows.push([`Tömeg (${this.app.settings.material || ''})`, fmtMass((v / 1000) * dens)]);
+        const body = this.app.doc.body(it.bodyId);
+        const dens = bodyDensity(this.app, body);
+        const mat = body && body.material ? materialById(body.material) : null;
+        rows.push([`Tömeg (${mat ? mat.name : this.app.settings.material || ''})`, fmtMass((v / 1000) * dens)]);
         const b = g.bbox;
         rows.push(['Méret', `${fmtLen(b.max.x - b.min.x, { unit: false })} × ${fmtLen(b.max.y - b.min.y, { unit: false })} × ${fmtLen(b.max.z - b.min.z)}`]);
       }

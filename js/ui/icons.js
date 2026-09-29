@@ -125,6 +125,18 @@ const P = {
   wireframe: '<path d="M4 8.5 12 4l8 4.5v8L12 21l-8-4.5Z"/><path d="M4 8.5 12 13l8-4.5M12 13v8"/><path d="M4 16.5 12 12l8 4.5M12 4v8" stroke-dasharray="1.8 1.8"/>',
   xray: '<path d="M4 8.5 12 4l8 4.5v8L12 21l-8-4.5Z" fill="currentColor" fill-opacity=".2"/><path d="M4 8.5 12 13l8-4.5M12 13v8"/><path d="M4 16.5 12 12l8 4.5M12 4v8" stroke-dasharray="1.8 1.8"/>',
   shaded: '<path d="M4 8.5 12 4l8 4.5v8L12 21l-8-4.5Z" fill="currentColor" fill-opacity=".45" stroke="none"/><path d="M12 13v8l8-4.5v-8Z" fill="currentColor" fill-opacity=".3" stroke="none"/>',
+  parallel: '<path d="M6 19 14 5M11 19 19 5"/>',
+  perpendicular: '<path d="M5 19h14M12 19V5"/><path d="M12 15h4v4" stroke-opacity=".6"/>',
+  tangentC: '<circle cx="11" cy="13" r="6"/><path d="M3 7h18"/>',
+  coincident: '<path d="M4 18 12 12M20 18l-8-6"/><circle cx="12" cy="12" r="2.4" fill="currentColor"/>',
+  concentric: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1" fill="currentColor"/>',
+  onCurve: '<path d="M3 17c4-9 14-9 18 0"/><circle cx="12" cy="10.3" r="2.3" fill="currentColor"/>',
+  midpoint: '<path d="M4 17 20 7"/><circle cx="12" cy="12" r="2.3" fill="currentColor"/><path d="M9 20.5l6-3.5" stroke-opacity=".5"/>',
+  equal: '<path d="M5 9h14M5 15h14"/>',
+  symmetric: '<path d="M12 3v18" stroke-dasharray="2 2"/><path d="M9 7 4 12l5 5M15 7l5 5-5 5"/>',
+  dimension: '<path d="M4 8v8M20 8v8M4 12h16"/><path d="m7 9.5-3 2.5 3 2.5M17 9.5l3 2.5-3 2.5"/>',
+  disconnect: '<path d="M4 12h5M15 12h5"/><path d="M9 8.5a3.5 3.5 0 0 1 0 7M15 8.5a3.5 3.5 0 0 0 0 7"/>',
+  variables: '<path d="M7 20c2 0 3-1.5 3.5-4l2-10C13 4 14 3 16 3"/><path d="M7 10h7"/><path d="m15 13 5 6M20 13l-5 6"/>',
   shadedEdges: '<path d="M4 8.5 12 4l8 4.5v8L12 21l-8-4.5Z" fill="currentColor" fill-opacity=".35"/><path d="M4 8.5 12 13l8-4.5M12 13v8"/>',
 };
 

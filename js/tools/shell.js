@@ -62,27 +62,69 @@ export class ShellTool extends KernelTool {
   async done() { this.app.lastShellT = this.t; await super.done(); }
 }
 
+/** A test kiterjedése a lap síkjától a normálissal ellentétes irányban ("Összesen" méret). */
+export function extentBehind(app, bodyId, origin, dir) {
+  const g = app.bodies.gfx.get(bodyId);
+  if (!g) return 0;
+  const v = g.data.vertices;
+  let mx = 0;
+  for (let i = 0; i < v.length; i += 3) {
+    const d = (origin.x - v[i]) * dir.x + (origin.y - v[i + 1]) * dir.y + (origin.z - v[i + 2]) * dir.z;
+    if (d > mx) mx = d;
+  }
+  return mx;
+}
+
 export class OffsetFaceTool extends KernelTool {
   get toolId() { return 'offsetFace'; }
   get opName() { return 'offsetFaces'; }
   get label() { return 'Lap eltolás'; }
   get icon() { return 'offsetFace'; }
+  get commitOnEmptyTap() { return Math.abs(this.d) > 1e-6; }
 
   start() {
     const sel = this.app.sel.filter((s) => s.type === 'face');
     if (!sel.length) throw new Error('Jelölj ki egy vagy több lapot');
-    this.bodyId = sel[0].bodyId;
+    this.bodyId = sel[sel.length - 1].bodyId;
     this.faces = sel.filter((s) => s.bodyId === this.bodyId).map((s) => s.index);
-    this.d = 0;
-    const fi = faceInfo(this.app, this.bodyId, this.faces[0]);
-    const origin = V3(fi.point || fi.center), dir = V3(fi.normal || [0, 0, 1]);
+    this.d = this.opts.initial || 0;
+    this.mode = this.app.offsetMode || 'total';
+    const fi = faceInfo(this.app, this.bodyId, this.faces[this.faces.length - 1]);
+    this.origin = V3(fi.point || fi.center);
+    this.dir = V3(fi.normal || [0, 0, 1]);
+    this.total0 = fi.type === 'PLANE' ? extentBehind(this.app, this.bodyId, this.origin, this.dir) : 0;
     this.arrow = this.addHandle(new ArrowHandle(this.app.handles, {
-      origin, dir, value: 0,
-      snap: axisSnapper(this.app, origin, dir, new Set([this.bodyId])),
+      origin: this.origin, dir: this.dir, value: this.d,
+      snap: axisSnapper(this.app, this.origin, this.dir, new Set([this.bodyId])),
       onChange: (v) => { this.d = v; this.update(); },
-      onTap: () => this.app.ui.keypad({ label: 'Eltolás', kind: 'len', value: this.d, anchor: this.arrow.bubble.elm, onDone: (v) => { this.d = v; this.arrow.setValue(v); this.update(); } }),
+      onTap: () => this.editValue(),
     }));
-    this.refreshPanel();
+    this.applyMode();
+    if (this.d) this.update(); else this.refreshPanel();
+  }
+
+  applyMode() {
+    const total = this.mode === 'total' && this.total0 > 0;
+    this.arrow.o.label = total ? 'Összesen' : '';
+    this.arrow.o.display = total ? (v) => this.total0 + v : null;
+    this.arrow.update();
+  }
+
+  editValue() {
+    const total = this.mode === 'total' && this.total0 > 0;
+    this.app.ui.keypad({
+      label: total ? 'Teljes méret a lap irányában' : 'Eltolás', kind: 'len', value: total ? this.total0 + this.d : this.d,
+      anchor: this.arrow.bubble ? this.arrow.bubble.elm : null,
+      onDone: (v) => { this.d = total ? v - this.total0 : v; this.arrow.setValue(this.d); this.update(); },
+    });
+  }
+
+  /** Koppintással további lapok vehetők fel ugyanazon a testen. */
+  onSelectionChange() {
+    const sel = this.app.sel.filter((s) => s.type === 'face' && s.bodyId === this.bodyId);
+    if (!sel.length) { this.app.setTool(null); return; }
+    this.faces = sel.map((s) => s.index);
+    this.update();
   }
 
   args() {
@@ -93,15 +135,21 @@ export class OffsetFaceTool extends KernelTool {
   update() { this.requestPreview(); this.refreshPanel(); }
 
   panel() {
+    const total = this.mode === 'total' && this.total0 > 0;
     return {
       title: 'Lap eltolás', icon: 'offsetFace',
       items: [
-        this.hint(this.d === 0 ? 'Húzd a nyilat: kifelé anyag hozzáadás, befelé elvétel (furat átmérő is!)' : ''),
-        { type: 'number', key: 'd', label: 'Eltolás', kind: 'len', value: this.d },
+        this.hint(this.d === 0 ? 'Húzd a nyilat – kifelé anyagot ad, befelé elvesz; koppints további lapokra' : `${this.faces.length} lap`),
+        { type: 'chips', key: 'mode', value: this.mode, hidden: !(this.total0 > 0), options: [{ value: 'total', label: 'Összesen' }, { value: 'offset', label: 'Eltolás' }] },
+        { type: 'number', key: 'd', label: total ? 'Összesen' : 'Eltolás', kind: 'len', value: total ? this.total0 + this.d : this.d },
       ],
       doneDisabled: !this.args(),
     };
   }
 
-  change(k, v) { if (k === 'd') { this.d = v; this.arrow.setValue(v); } this.update(); }
+  change(k, v) {
+    if (k === 'mode') { this.mode = v; this.app.offsetMode = v; this.applyMode(); this.refreshPanel(); return; }
+    if (k === 'd') { this.d = this.mode === 'total' && this.total0 > 0 ? v - this.total0 : v; this.arrow.setValue(this.d); }
+    this.update();
+  }
 }

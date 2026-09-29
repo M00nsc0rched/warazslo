@@ -5,15 +5,18 @@ import { BodiesView } from './view/bodies.js';
 import { Picker, pickTolerance } from './view/picking.js';
 import { ViewCube } from './view/viewcube.js';
 import { InputController } from './view/input.js';
-import { HandleManager } from './view/handles.js';
+import { HandleManager, ArrowHandle } from './view/handles.js';
+import { extentBehind } from './tools/shell.js';
 import { KernelClient } from './kernel/client.js';
 import { DocumentStore, emptyState, newBodyId, newSketchId, BODY_COLORS } from './doc/document.js';
 import * as storage from './doc/storage.js';
 import { SketchManager, canonicalFrame, planeToJSON, planeFromJSON, toLocal, toWorld, samePlane } from './sketch/manager.js';
 import { UI } from './ui/ui.js';
 import { Emitter, uid, debounce, el } from './util/misc.js';
-import { setUnit } from './util/units.js';
-import { buildLeftToolbar, buildRightToolbar, createTool, selectionSummary } from './tools/index.js';
+import { setUnit, setVariables, evalVariables } from './util/units.js';
+import { SketchAnnotations, addDefaultDimension } from './sketch/annotate.js';
+import { pruneConstraints, refreshExpressions } from './sketch/constraints.js';
+import { buildLeftToolbar, buildRightToolbar, buildSketchBar, createTool, selectionSummary } from './tools/index.js';
 import { HomeScreen } from './ui/home.js';
 import { FreehandCapture } from './sketch/freehand.js';
 import { PointDrag } from './sketch/edit.js';
@@ -36,6 +39,7 @@ export class App extends Emitter {
     this.kernel.on('busy', (b) => this.ui.setBusy(b));
     this.kernel.on('restart', (msg) => this.ui.toast(msg, 'error', 4500));
     this.sketches = new SketchManager(this);
+    this.annotations = new SketchAnnotations(this);
     this.sel = [];
     this.tool = null;
     this.isolated = null;
@@ -46,8 +50,11 @@ export class App extends Emitter {
 
     const slot = this.ui.renderRight(buildRightToolbar(this));
     this.cube = new ViewCube(this.vp, slot);
+    this.cube.attach(slot);
+    this.cube.onHome = () => this.vp.fitBox(this.bodies.bounds());
     this.input = new InputController(this.vp, this.cube, this._inputHandler());
     this.home = new HomeScreen(this);
+    this.ui.varNames = () => (this.doc ? (this.doc.state.variables || []).map((v) => v.name) : []);
     this._setupKeyboard();
     this._saveDebounced = debounce(() => this.saveNow(false), 1200);
     this.ui.root.classList.toggle('hide-labels', !this.settings.showLabels);
@@ -204,12 +211,15 @@ export class App extends Emitter {
     if (seq !== this._syncSeq || doc !== this.doc) return;
     const hidden = doc.view.hidden || [];
     const iso = this.isolated;
+    this.bodies.showMaterials = this.mode === 'view' || !!this.settings.materialsInModel;
     this.bodies.sync(st.bodies.map((b) => ({
-      id: b.id, rev: b.rev, color: b.color,
+      id: b.id, rev: b.rev, color: b.color, material: b.material,
       visible: !hidden.includes(b.id) && (!iso || iso.has(b.id)),
       mesh: this.bodies.getCachedMesh(b.id, b.rev),
     })));
-    this.sketches.sync(st, iso ? [...hidden, ...st.sketches.map((s) => s.id).filter((id) => !iso.has(id))] : hidden);
+    const viewOnly = this.mode === "view";
+    this.sketches.sync(st, viewOnly ? st.sketches.map((s) => s.id) : iso ? [...hidden, ...st.sketches.map((s) => s.id).filter((id) => !iso.has(id))] : hidden);
+    setVariables(evalVariables(st.variables || []).map);
     this._syncPlanes();
     this._syncImages();
     this.vp.updateSceneBounds(this.bodies.bounds());
@@ -222,7 +232,7 @@ export class App extends Emitter {
     for (const o of [...g.children]) { g.remove(o); o.traverse((x) => { x.geometry && x.geometry.dispose(); x.material && x.material.dispose(); }); }
     const hidden = this.doc.view.hidden || [];
     for (const p of this.doc.state.planes) {
-      if (hidden.includes(p.id)) continue;
+      if (hidden.includes(p.id) || this.mode === "view") continue;
       const f = planeFromJSON(p);
       const s = p.size || 60;
       const sel = this.sel.some((x) => x.type === 'plane' && x.planeId === p.id);
@@ -345,6 +355,33 @@ export class App extends Emitter {
     const sum = selectionSummary(this, sel);
     this.ui.setSelectionInfo(sum.text);
     this._updateDimBubble(sel);
+    this._updateFaceHandle();
+    if (this.annotations) this.annotations.refresh();
+  }
+
+  /** Kijelölt lap(ok): azonnal megjelenő eltoló nyíl "Összesen" mérettel (mint a Shapr3D-ben). */
+  _updateFaceHandle() {
+    if (this._faceHandle) { this.handles.remove(this._faceHandle.h); this._faceHandle = null; }
+    if (!this.doc || this.tool || this.mode === 'view') return;
+    const faces = this.sel.filter((s) => s.type === 'face');
+    if (!faces.length || faces.length !== this.sel.length) return;
+    const last = faces[faces.length - 1];
+    if (faces.some((f) => f.bodyId !== last.bodyId)) return;
+    const g = this.bodies.gfx.get(last.bodyId);
+    const fi = g && g.data.faces ? g.data.faces[last.index] : null;
+    if (!fi || !fi.normal) return;
+    const origin = V(...(fi.point || fi.center)), dir = V(...fi.normal);
+    const total0 = fi.type === 'PLANE' ? extentBehind(this, last.bodyId, origin, dir) : 0;
+    const total = total0 > 0 && (this.offsetMode || 'total') === 'total';
+    const h = new ArrowHandle(this.handles, {
+      origin, dir, value: 0, label: total ? 'Összesen' : '', display: total ? (v) => total0 + v : null,
+      onTap: () => this.ui.keypad({
+        label: total ? 'Teljes méret a lap irányában' : 'Eltolás', kind: 'len', value: total ? total0 : 0, anchor: h.bubble ? h.bubble.elm : null,
+        onDone: (v) => { const d = total ? v - total0 : v; if (Math.abs(d) > 1e-6) this.startTool('offsetFace', { initial: d }); },
+      }),
+    });
+    this.handles.add(h);
+    this._faceHandle = { h, bodyId: last.bodyId };
   }
 
   /** Egyetlen kijelölt vázlatgörbe mérete egy koppintható buborékban. */
@@ -354,12 +391,14 @@ export class App extends Emitter {
     const s = sel[0];
     const sk = this.doc.sketch(s.sketchId);
     const c = sk && sk.curves.find((x) => x.id === s.curveId);
-    if (!c || !['line', 'circle', 'arc'].includes(c.t)) return;
+    if (!c || !["line", "circle", "arc"].includes(c.t)) return;
+    // ha már van vezérlő mérete, azt mutatja az annotáció
+    if ((sk.constraints || []).some((k) => ["length", "radius", "diameter"].includes(k.type) && k.a && k.a.curve === c.id)) return;
     const f = planeFromJSON(sk.plane);
     const mid = c.t === 'line' ? [(c.a[0] + c.b[0]) / 2, (c.a[1] + c.b[1]) / 2] : c.t === 'circle' ? [c.c[0] + c.r * 0.7071, c.c[1] + c.r * 0.7071] : [c.c[0] + c.r * Math.cos((c.a0 + c.a1) / 2), c.c[1] + c.r * Math.sin((c.a0 + c.a1) / 2)];
-    import('./sketch/edit.js').then(({ dimensionText, editCurveDimension }) => {
+    import("./sketch/edit.js").then(({ dimensionText }) => {
       if (this.sel !== sel) return;
-      const b = this.handles.bubble({ onTap: () => editCurveDimension(this, sk, c) });
+      const b = this.handles.bubble({ cls: "dim", onTap: () => addDefaultDimension(this) });
       b.set(dimensionText(c));
       b.at(toWorld(f, mid));
       this._dimBubble = b;
@@ -420,6 +459,12 @@ export class App extends Emitter {
     this.ui.closeKeypad();
     this.tool = tool;
     this.bodies.setHover(null);
+    // vázlat módból kilépve az eredeti vetítés visszaáll
+    if ((!tool || !tool.isSketchTool) && this._sketchPrevOrtho != null) {
+      this.vp.setOrtho(this._sketchPrevOrtho);
+      this._sketchPrevOrtho = null;
+      if (this._prevGridFrame) { this.vp.setGridFrame(this._prevGridFrame); this._prevGridFrame = null; }
+    }
     if (tool) {
       try { tool.start(); } catch (e) { console.error(e); this.ui.toast(e.message, 'error'); this.tool = null; }
     }
@@ -431,6 +476,8 @@ export class App extends Emitter {
       this.ui.hidePanel();
     }
     this._updateDimBubble(this.sel);
+    this._updateFaceHandle();
+    if (this.annotations) this.annotations.refresh();
     this.updateToolbar();
     this.vp.requestRender();
   }
@@ -446,6 +493,7 @@ export class App extends Emitter {
     this.ui.setStatus(view ? 'Nézet mód – csak megtekintés' : null, 'info');
     clearTimeout(this._modePill);
     if (view) this._modePill = setTimeout(() => { if (this.mode === 'view') this.ui.setStatus(null); }, 2500);
+    this._syncScene(false);
     this.updateToolbar();
     this.vp.requestRender();
   }
@@ -462,8 +510,9 @@ export class App extends Emitter {
   }
 
   updateToolbar() {
-    if (!this.doc) return;
+    if (!this.doc) { this.ui.renderSketchBar(null); return; }
     this.ui.renderLeft(buildLeftToolbar(this));
+    this.ui.renderSketchBar(buildSketchBar(this));
   }
 
   // ================================================================ kernel műveletek véglegesítése
@@ -541,12 +590,15 @@ export class App extends Emitter {
   }
 
   /** Görbék hozzáadása egy vázlathoz (a görbék a megadott keret koordinátáiban). */
-  addCurves(frame, curves, label = 'Vázlat', icon = 'sketch') {
+  addCurves(frame, curves, label = "Vázlat", icon = "sketch", constraints = []) {
     if (!curves.length) return null;
     const { state, sketch, frame: sf } = this.ensureSketch(this.doc.state, frame);
     const conv = convertCurves(curves, frame, sf);
-    const withIds = conv.map((c) => ({ ...c, id: c.id || uid('c') }));
-    const ns = { ...sketch, curves: [...sketch.curves, ...withIds] };
+    const withIds = conv.map((c) => ({ ...c, id: c.id || uid("c") }));
+    // kényszerek: a "#i" hivatkozások az új görbékre mutatnak
+    const mapRef = (r) => (r && typeof r.curve === "string" && r.curve.startsWith("#") ? { ...r, curve: withIds[+r.curve.slice(1)].id } : r);
+    const cons = constraints.map((k) => ({ id: uid("k"), ...k, a: mapRef(k.a), b: mapRef(k.b), c: mapRef(k.c) }));
+    const ns = { ...sketch, curves: [...sketch.curves, ...withIds], constraints: [...(sketch.constraints || []), ...cons] };
     const newState = { ...state, sketches: state.sketches.map((s) => (s.id === sketch.id ? ns : s)) };
     this.doc.commit(label, newState, { icon });
     return { sketchId: sketch.id, curves: withIds };
@@ -556,14 +608,26 @@ export class App extends Emitter {
     const st = this.doc.state;
     const s = st.sketches.find((x) => x.id === sketchId);
     if (!s) return;
-    const ns = fn(s);
+    let ns = fn(s);
     if (!ns || ns === s) return;
+    ns = pruneConstraints(ns);
     let sketches;
     if (ns.curves && ns.curves.length === 0) sketches = st.sketches.filter((x) => x.id !== sketchId);
     else sketches = st.sketches.map((x) => (x.id === sketchId ? ns : x));
     const newState = { ...st, sketches };
     if (replace) this.doc.replace(newState);
     else this.doc.commit(label, newState, { icon });
+  }
+
+  // ================================================================ változók
+  setVariables(list) {
+    const st = this.doc.state;
+    setVariables(evalVariables(list).map);
+    const r = refreshExpressions({ ...st, variables: list });
+    if (r.errors.length) this.ui.toast(r.errors[0], 'error', 4000);
+    this.doc.commit('Változók', r.state, { icon: 'variables' });
+    this.emit('variables-changed', { sketches: r.changed });
+    if (r.changed.length) this.ui.toast(`${r.changed.length} vázlat frissítve`, 'ok', 1600);
   }
 
   // ================================================================ törlés
@@ -595,7 +659,7 @@ export class App extends Emitter {
     }
     let sketches = st.sketches.filter((s) => !sketchIds.has(s.id)).map((s) => {
       const del = curveBySketch.get(s.id);
-      return del ? { ...s, curves: s.curves.filter((c) => !del.has(c.id)) } : s;
+      return del ? pruneConstraints({ ...s, curves: s.curves.filter((c) => !del.has(c.id)) }) : s;
     }).filter((s) => s.curves.length > 0 || !curveBySketch.has(s.id));
     const ns = {
       ...st,
@@ -626,12 +690,21 @@ export class App extends Emitter {
       undoGesture() { if (app.mode !== 'view') app.undo(); },
       redoGesture() { if (app.mode !== 'view') app.redo(); },
       autoRotateStopped() { app.updateToolbar(); },
+      longPress(ev) { app._longPress(ev); },
+      canLongPress() { return !!(app.drag && app.drag.kind === 'freehand'); },
     };
   }
 
   _down(ev) {
     if (!this.doc) return false;
     const hh = this.handles.hit(ev.x, ev.y, ev.pointerType);
+    // a kijelölt lap nyila: húzásra a lap eltolás eszköz indul és átveszi a húzást
+    if (hh && this._faceHandle && hh.h === this._faceHandle.h) {
+      this.startTool('offsetFace');
+      const t = this.tool;
+      if (t && t.arrow) { this.drag = { kind: 'handle', h: t.arrow, part: null, x0: ev.x, y0: ev.y }; t.arrow.dragStart(ev); return true; }
+      return false;
+    }
     if (hh) {
       this.drag = { kind: 'handle', h: hh.h, part: hh.part, x0: ev.x, y0: ev.y };
       hh.h.dragStart(ev, hh.part);
@@ -699,6 +772,7 @@ export class App extends Emitter {
     if (this.tool && this.tool.tap(ev)) return;
     if (this.tool && !this.tool.allowsSelection) return;
     const it = this.pickItem(ev, { vertices: this.tool && this.tool.pickVertices });
+    if (!it && this.tool && this.tool.commitOnEmptyTap) { this.tool.done(); return; }
     if (!it) { if (!this.tool || this.tool.clearOnEmptyTap !== false) this.clearSelection(); return; }
     this.toggleSelect(it);
   }
@@ -708,14 +782,77 @@ export class App extends Emitter {
     if (this.tool && this.tool.doubleTap(ev)) return;
     const it = this.pickItem(ev);
     if (!it) { this.vp.fitBox(this.bodies.bounds()); return; }
-    if (it.bodyId) {
-      // az első koppintás által kijelölt lap/él helyett a teljes test
-      const rest = this.sel.filter((s) => !(s.bodyId === it.bodyId));
-      this.setSelection([...rest, { type: 'body', bodyId: it.bodyId }]);
-    } else if (it.sketchId) {
-      const rest = this.sel.filter((s) => s.sketchId !== it.sketchId);
-      this.setSelection([...rest, { type: 'sketch', sketchId: it.sketchId }]);
+    if (this.mode === 'view') {
+      if (it.type === 'face') this.zoomToFace(it);
+      return;
     }
+    // dupla nyomás egy sík lapra / síkra: vázlat indul rajta (mint a Shapr3D-ben)
+    if (it.type === 'face') {
+      const g = this.bodies.gfx.get(it.bodyId);
+      const fi = g && g.data.faces ? g.data.faces[it.index] : null;
+      if (fi && fi.type === 'PLANE' && fi.normal) {
+        this.enterSketchMode(canonicalFrame(V(...fi.normal), V(...fi.center)), { focus: V(...fi.center) });
+        return;
+      }
+      this.zoomToFace(it);
+      return;
+    }
+    if (it.type === 'plane') { this.enterSketchMode(planeFromJSON(this.doc.plane(it.planeId))); return; }
+    if (it.sketchId) {
+      const sk = this.doc.sketch(it.sketchId);
+      if (sk) this.enterSketchMode(planeFromJSON(sk.plane));
+      return;
+    }
+    if (it.bodyId) this.setSelection([{ type: 'body', bodyId: it.bodyId }]);
+  }
+
+  /** Ráközelítés egy lapra (a lapra merőleges nézet). */
+  zoomToFace(it) {
+    const g = this.bodies.gfx.get(it.bodyId);
+    const fi = g && g.data.faces ? g.data.faces[it.index] : null;
+    if (!fi) return;
+    const box = new THREE.Box3();
+    const r = g.faceRanges.get(it.index);
+    if (r) {
+      const tri = g.data.triangles, pos = g.data.vertices;
+      for (let i = r[0]; i < r[0] + r[1]; i++) box.expandByPoint(V(pos[tri[i] * 3], pos[tri[i] * 3 + 1], pos[tri[i] * 3 + 2]));
+    }
+    if (fi.type === 'PLANE' && fi.normal) {
+      const f = canonicalFrame(V(...fi.normal), V(...fi.center));
+      this.vp.setViewDirection(f.normal.clone(), true, f.yDir.clone());
+    }
+    this.vp.fitBox(box);
+  }
+
+  /** Vázlat mód: a nézet a síkra fordul, rajzeszköz aktív, jobb oldalt a kényszerek. */
+  enterSketchMode(frame, { focus = null, tool = 'line' } = {}) {
+    if (this.mode === 'view') this.setMode('model');
+    // meglévő vázlat keretének átvétele ugyanezen a síkon
+    const existing = this.sketches.findSketchOnPlane(frame);
+    const f = existing ? planeFromJSON(existing.plane) : frame;
+    if (this._sketchPrevOrtho == null) { this._sketchPrevOrtho = this.vp.useOrtho; this._prevGridFrame = this.vp.gridFrame; }
+    this.vp.setGridFrame(f);
+    this.vp.setViewDirection(f.normal.clone(), true, f.yDir.clone());
+    if (this.settings.sketchOrtho !== false) this.vp.setOrtho(true);
+    if (focus) {
+      const box = this.bodies.bounds();
+      if (!box.isEmpty()) this.vp.fitBox(box);
+    }
+    this.clearSelection();
+    this.startTool(tool, { frame: f });
+  }
+
+  exitSketchMode() {
+    this.setTool(null);
+  }
+
+  /** Hosszú nyomás: teljes test kijelölése és helyzetmenü. */
+  _longPress(ev) {
+    if (!this.doc) return;
+    const it = this.pickItem(ev);
+    const at = { x: ev.x + (this.vp.rect ? this.vp.rect.left : 0), y: ev.y + (this.vp.rect ? this.vp.rect.top : 0) };
+    if (navigator.vibrate) try { navigator.vibrate(12); } catch (e) { /* */ }
+    sheets.contextMenu(this, it, at);
   }
 
   _hover(ev) {
@@ -752,6 +889,12 @@ export class App extends Emitter {
       if (k === 'enter') { if (this.tool) this.tool.done(); return; }
       if (k === 'delete' || k === 'backspace') { e.preventDefault(); this.deleteSelection(); return; }
       if (k === 'v' && !e.repeat) { this.setMode(this.mode === 'view' ? 'model' : 'view'); return; }
+      if (k === 'k' && !e.repeat && this.mode !== 'view') { addDefaultDimension(this); return; }
+      if (e.shiftKey && this.tool && this.tool.isSketchTool) {
+        const bar = buildSketchBar(this);
+        const it = bar && bar.items.find((b) => b !== '-' && b.kbd === '⇧' + k.toUpperCase());
+        if (it) { e.preventDefault(); if (!it.disabled) it.onTap(); else this.ui.toast('Ehhez a kijelöléshez nem alkalmazható', '', 1500); return; }
+      }
       const map = { e: 'extrude', f: 'fillet', m: 'move', h: 'shell', l: 'line', r: 'rect', c: 'circle', a: 'arc', s: 'spline', t: 'trim', d: 'measure', x: 'section', o: 'offsetFace', b: 'boolean', p: 'polygon' };
       if (map[k] && !e.repeat) { e.preventDefault(); this.startTool(map[k]); return; }
       const views = { 1: [0, -1, 0], 3: [1, 0, 0], 7: [0, 0, 1], 2: [0, 1, 0], 4: [-1, 0, 0], 8: [0, 0, -1] };
@@ -772,7 +915,7 @@ export class App extends Emitter {
     if (key === 'shadows') { this.vp.shadows = value; this.vp.ground.visible = value && !this.bodies.bounds().isEmpty(); this.vp.requestRender(); }
     if (key === 'showLabels') document.getElementById('app').classList.toggle('hide-labels', !value);
     this.ui.renderRight(buildRightToolbar(this));
-    this.cube.slot = this.ui.cubeSlot;
+    this.cube.attach(this.ui.cubeSlot);
     this.vp.requestRender();
   }
 }

@@ -7,7 +7,10 @@ export const LENGTH_UNITS = {
   in: { f: 25.4, label: 'in', dec: 3 },
 };
 
-let currentUnit = 'mm';
+let currentUnit = "mm";
+let currentVars = new Map(); // név (kisbetűs) -> { v, dim }
+export function setVariables(map) { currentVars = map || new Map(); }
+export function getVariables() { return currentVars; }
 export function setUnit(u) { if (LENGTH_UNITS[u]) currentUnit = u; }
 export function getUnit() { return currentUnit; }
 
@@ -86,9 +89,9 @@ function tokenize(src) {
     }
     if ('+-*/^()'.includes(c)) { toks.push({ t: 'op', v: c }); i++; continue; }
     if (c === '"' || c === "'" || c === '°') { toks.push({ t: 'unit', v: c }); i++; continue; }
-    if (/[a-zA-Z_]/.test(c)) {
+    if (/[a-zA-Z_áéíóöőúüűÁÉÍÓÖŐÚÜŰ]/.test(c)) {
       let j = i;
-      while (j < s.length && /[a-zA-Z_]/.test(s[j])) j++;
+      while (j < s.length && /[a-zA-Z0-9_áéíóöőúüűÁÉÍÓÖŐÚÜŰ]/.test(s[j])) j++;
       const w = s.slice(i, j).toLowerCase();
       if (UNIT_TOKENS[w]) toks.push({ t: 'unit', v: w });
       else toks.push({ t: 'id', v: w });
@@ -103,7 +106,7 @@ function tokenize(src) {
  * Kifejezés kiértékelése. kind: 'len' (eredmény mm) | 'angle' (fok) | 'num'
  * Egység nélküli számok a jelenlegi egységben értendők (összeadásnál/végeredménynél).
  */
-export function evaluate(src, kind = 'len') {
+export function evaluate(src, kind = "len", vars = currentVars) {
   const toks = tokenize(src);
   let p = 0;
   const peek = () => toks[p];
@@ -122,7 +125,8 @@ export function evaluate(src, kind = 'len') {
       if (!eat('op', ')')) throw new Error('Hiányzó zárójel');
     } else if (k.t === 'id') {
       p++;
-      if (k.v === 'pi') val = { v: Math.PI, dim: 0 };
+      if (k.v === "pi") val = { v: Math.PI, dim: 0 };
+      else if (vars && vars.has(k.v)) { const vv = vars.get(k.v); val = { v: vv.v, dim: vv.dim }; }
       else {
         const fns = { sqrt: Math.sqrt, sin: (x) => Math.sin(x * Math.PI / 180), cos: (x) => Math.cos(x * Math.PI / 180), tan: (x) => Math.tan(x * Math.PI / 180), abs: Math.abs };
         const fn = fns[k.v];
@@ -182,7 +186,44 @@ export function evaluate(src, kind = 'len') {
   if (!toks.length) throw new Error('Üres');
   const res = expr();
   if (p < toks.length) throw new Error('Váratlan folytatás');
+  if (kind === "raw") { if (!isFinite(res.v)) throw new Error("Érvénytelen eredmény"); return res; }
   const out = lift(res);
   if (!isFinite(out.v)) throw new Error('Érvénytelen eredmény');
   return out.v;
+}
+
+/** Kiértékelés egységdimenzióval: { v, dim } (dim: 0 szám, 1 hossz mm-ben, 2 szög fokban) */
+export function evaluateRaw(src, vars = currentVars) { return evaluate(src, 'raw', vars); }
+
+const RESERVED = new Set(['mm', 'cm', 'm', 'in', 'ft', 'deg', 'rad', 'pi', 'sqrt', 'sin', 'cos', 'tan', 'abs']);
+export function isValidVarName(name) {
+  return /^[a-zA-Z_áéíóöőúüűÁÉÍÓÖŐÚÜŰ][a-zA-Z0-9_áéíóöőúüűÁÉÍÓÖŐÚÜŰ]*$/.test(name) && !RESERVED.has(name.toLowerCase());
+}
+
+/** Változólista kiértékelése (egymásra hivatkozhatnak). return { map, errors } */
+export function evalVariables(list = []) {
+  const map = new Map();
+  const errors = new Map();
+  let pending = list.filter((v) => v && v.name);
+  for (let pass = 0; pass <= list.length && pending.length; pass++) {
+    const next = [];
+    for (const v of pending) {
+      try { map.set(v.name.toLowerCase(), evaluateRaw(String(v.expr), map)); }
+      catch (e) { next.push(v); errors.set(v.name, e.message); }
+    }
+    if (next.length === pending.length) break;
+    pending = next;
+  }
+  for (const v of pending) if (!errors.has(v.name)) errors.set(v.name, 'Nem kiértékelhető');
+  for (const k of map.keys()) errors.delete(k);
+  for (const v of list) if (map.has(v.name.toLowerCase())) errors.delete(v.name);
+  return { map, errors };
+}
+
+/** Egy változó értékének szöveges formája. */
+export function fmtVar(val) {
+  if (!val) return '–';
+  if (val.dim === 1) return fmtLen(val.v);
+  if (val.dim === 2) return fmtAngle(val.v);
+  return trimNum(val.v, 4);
 }

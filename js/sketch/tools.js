@@ -172,10 +172,10 @@ export class DrawTool extends Tool {
   /** A fő méret gyors megadása billentyűzettel (számjegy leütése). */
   primaryDimKey() { return null; }
 
-  commit(curves, label) {
+  commit(curves, label, constraints = []) {
     const cons = this.construction;
-    const out = curves.map((c) => ({ ...c, id: uid('c'), ...(cons ? { construction: true } : {}) }));
-    this.app.addCurves(this.frame, out, label, this.icon);
+    const out = curves.map((c) => ({ ...c, id: uid("c"), ...(cons ? { construction: true } : {}) }));
+    this.app.addCurves(this.frame, out, label, this.icon, constraints);
     this.locks = {};
     return out;
   }
@@ -222,10 +222,7 @@ export class DrawTool extends Tool {
   pointerCancel() { this.firstFromDown = false; }
 
   tap(ev) {
-    if (ev.pointerType === 'touch') {
-      if (!this.app._penHintShown) { this.app._penHintShown = true; this.app.ui.toast('Rajzolni az Apple Pencillel tudsz – az ujj forgat és nagyít', '', 2600); }
-      return true;
-    }
+    if (ev.pointerType === 'touch') { touchSelect(this.app, ev); return true; }
     const cur = this.cursorAt(ev);
     if (!cur) return true;
     if (!this.pts.length) this.frame = cur.frame;
@@ -317,10 +314,18 @@ export class LineTool extends DrawTool {
   }
 
   click(p) {
-    if (!this.pts.length) { this.pts = [p]; return; }
+    if (!this.pts.length) { this.pts = [p]; this.startSnap = this.cursor && this.cursor.snap; return; }
     const last = this.pts[this.pts.length - 1];
     if (dist(last, p) < 1e-9) return;
-    this.commit([{ t: 'line', a: last, b: p }], 'Vonal');
+    // automatikus kényszerek: vízszintes/függőleges, beírt hossz, görbére illesztett végpont
+    const cons = [];
+    if (Math.abs(p[1] - last[1]) < 1e-9) cons.push({ type: "horizontal", a: { curve: "#0" } });
+    else if (Math.abs(p[0] - last[0]) < 1e-9) cons.push({ type: "vertical", a: { curve: "#0" } });
+    if (this.locks.len != null) cons.push({ type: "length", a: { curve: "#0" }, value: this.locks.len });
+    const sn = this.cursor && this.cursor.snap;
+    if (sn && sn.kind === "curve" && sn.curveId && dist(sn.p, p) < 1e-9) cons.push({ type: "onCurve", a: { curve: "#0", part: "b" }, b: { curve: sn.curveId } });
+    if (this.pts.length === 1 && this.startSnap && this.startSnap.kind === "curve" && this.startSnap.curveId && dist(this.startSnap.p, last) < 1e-9) cons.push({ type: "onCurve", a: { curve: "#0", part: "a" }, b: { curve: this.startSnap.curveId } });
+    this.commit([{ t: "line", a: last, b: p }], "Vonal", cons);
     if (this.pts.length >= 2 && dist(this.pts[0], p) < 1e-9) { this.resetEntity(); return; }
     this.pts.push(p);
     this.locks = {};
@@ -387,7 +392,10 @@ export class RectTool extends DrawTool {
     if (!this.pts.length) { this.pts = [p]; return; }
     const k = this.corners(this.pts[0], p);
     if (Math.abs(k[1][0] - k[0][0]) < 1e-9 || Math.abs(k[2][1] - k[1][1]) < 1e-9) return;
-    this.commit(k.map((q, i) => ({ t: 'line', a: q, b: k[(i + 1) % 4] })), 'Téglalap');
+    const rc = [{ type: "horizontal", a: { curve: "#0" } }, { type: "vertical", a: { curve: "#1" } }, { type: "horizontal", a: { curve: "#2" } }, { type: "vertical", a: { curve: "#3" } }];
+    if (this.locks.w != null) rc.push({ type: "length", a: { curve: "#0" }, value: Math.abs(k[1][0] - k[0][0]) });
+    if (this.locks.h != null) rc.push({ type: "length", a: { curve: "#1" }, value: Math.abs(k[2][1] - k[1][1]) });
+    this.commit(k.map((q, i) => ({ t: "line", a: q, b: k[(i + 1) % 4] })), "Téglalap", rc);
     this.resetEntity();
   }
 }
@@ -425,7 +433,7 @@ export class CircleTool extends DrawTool {
     if (!this.pts.length) { this.pts = [p]; return; }
     const r = dist(this.pts[0], p);
     if (r < 1e-9) return;
-    this.commit([{ t: 'circle', c: this.pts[0], r }], 'Kör');
+    this.commit([{ t: "circle", c: this.pts[0], r }], "Kör", this.locks.d != null ? [{ type: "diameter", a: { curve: "#0" }, value: 2 * r }] : []);
     this.resetEntity();
   }
 }
@@ -498,7 +506,15 @@ export class TangentArcTool extends DrawTool {
     }
     const a = this.arc(p);
     if (!a) return;
-    this.commit([a], 'Érintő ív');
+    const tc = [];
+    if (this.tanCurve) {
+      const src = this.tanCurve;
+      let mode;
+      if (src.t === "arc") { const d = dist(src.c, a.c); mode = Math.abs(d - (src.r + a.r)) < Math.abs(d - Math.abs(src.r - a.r)) ? "ext" : "int"; }
+      tc.push({ type: "tangent", a: { curve: "#0" }, b: { curve: src.id }, ...(mode ? { mode } : {}) });
+    }
+    const out = this.commit([a], "Érintő ív", tc);
+    this.tanCurve = out[0];
     // folytatható: a következő érintő az ív végén
     const end = p;
     const tangentEnd = this.arcEndTangent(a, end);
@@ -511,13 +527,13 @@ export class TangentArcTool extends DrawTool {
       const f = planeFromJSON(s.plane);
       if (!samePlane(f, this.frame)) continue;
       for (const c of s.curves) {
-        if (c.t === 'line') {
-          if (dist(c.b, p) < 1e-6) return norm(sub(c.b, c.a));
-          if (dist(c.a, p) < 1e-6) return norm(sub(c.a, c.b));
-        } else if (c.t === 'arc') {
+        if (c.t === "line") {
+          if (dist(c.b, p) < 1e-6) { this.tanCurve = c; return norm(sub(c.b, c.a)); }
+          if (dist(c.a, p) < 1e-6) { this.tanCurve = c; return norm(sub(c.a, c.b)); }
+        } else if (c.t === "arc") {
           const e0 = polar(c.c, c.r, c.a0), e1 = polar(c.c, c.r, c.a1);
-          if (dist(e1, p) < 1e-6) return norm(perp(sub(e1, c.c)));
-          if (dist(e0, p) < 1e-6) return mul(norm(perp(sub(e0, c.c))), -1);
+          if (dist(e1, p) < 1e-6) { this.tanCurve = c; return norm(perp(sub(e1, c.c))); }
+          if (dist(e0, p) < 1e-6) { this.tanCurve = c; return mul(norm(perp(sub(e0, c.c))), -1); }
         }
       }
     }
@@ -654,6 +670,14 @@ export class SlotTool extends DrawTool {
       { t: 'arc', c: c1, r, a0: a, a1: a + Math.PI },
     ];
   }
+  /** Hosszlyuk kényszerei: érintő ívek, egyenlő sugár; beírt szélesség méretként. */
+  slotCons(withW) {
+    const T = (a, b) => ({ type: "tangent", a: { curve: `#${a}` }, b: { curve: `#${b}` } });
+    const c = [T(0, 1), T(1, 2), T(2, 3), T(3, 0), { type: "equal", a: { curve: "#1" }, b: { curve: "#3" } }];
+    if (withW && this.locks.w != null) c.push({ type: "diameter", a: { curve: "#1" }, value: this.locks.w });
+    return c;
+  }
+
   width(c) {
     const [c1, c2] = this.pts;
     const d = norm(sub(c2, c1));
@@ -676,7 +700,7 @@ export class SlotTool extends DrawTool {
     return q;
   }
   onLock(k) {
-    if (k === 'w' && this.pts.length === 2) { this.commit(this.shape(this.pts[0], this.pts[1], this.locks.w), 'Hosszlyuk'); this.resetEntity(); return true; }
+    if (k === 'w' && this.pts.length === 2) { this.commit(this.shape(this.pts[0], this.pts[1], this.locks.w), "Hosszlyuk", this.slotCons(true)); this.resetEntity(); return true; }
     if (k === 'l' && this.pts.length === 1 && this.cursor) { this.click(this.constrain(this.cursor.uv)); return true; }
     return false;
   }
@@ -684,7 +708,7 @@ export class SlotTool extends DrawTool {
     if (this.pts.length < 2) { if (this.pts.length === 1 && dist(this.pts[0], p) < 1e-9) return; this.pts.push(p); this.locks = {}; return; }
     const w = this.width(p);
     if (w < 1e-9) return;
-    this.commit(this.shape(this.pts[0], this.pts[1], w), 'Hosszlyuk');
+    this.commit(this.shape(this.pts[0], this.pts[1], w), "Hosszlyuk", this.slotCons(false));
     this.resetEntity();
   }
 }
@@ -740,7 +764,7 @@ export class FreehandTool extends DrawTool {
   move(ev) { this.cap && this.cap.move(ev); }
   up(ev) { if (this.cap) { this.cap.finish(ev); this.cap = null; } }
   pointerCancel() { if (this.cap) { this.cap.cancel(); this.cap = null; } }
-  tap() { return true; }
+  tap(ev) { if (ev.pointerType === 'touch') touchSelect(this.app, ev); return true; }
   hover() { return true; }
 }
 
@@ -753,7 +777,7 @@ export class TrimTool extends DrawTool {
   down(ev) { if (ev.pointerType === 'touch') return false; this.trimAt(ev); return true; }
   move() {}
   up() {}
-  tap(ev) { if (ev.pointerType !== 'touch') this.trimAt(ev); return true; }
+  tap(ev) { if (ev.pointerType !== 'touch') this.trimAt(ev); else touchSelect(this.app, ev); return true; }
   hover(ev) {
     if (!ev) return true;
     const pk = this.app.sketches.pick(ev.x, ev.y, 12, { regions: false, points: false });
@@ -845,7 +869,7 @@ export class SketchFilletTool extends DrawTool {
   change(k, v) { if (k === 'r') { this.app.sketchFilletR = v; this.refreshPanel(); } else super.change(k, v); }
   down(ev) { if (ev.pointerType === 'touch') return false; this.at(ev); return true; }
   move() {} up() {}
-  tap(ev) { if (ev.pointerType !== 'touch') this.at(ev); return true; }
+  tap(ev) { if (ev.pointerType !== 'touch') this.at(ev); else touchSelect(this.app, ev); return true; }
   hover() { return true; }
 
   at(ev) {
@@ -872,7 +896,9 @@ export class SketchFilletTool extends DrawTool {
     const arc = arcFrom3(T1, mid, T2);
     const nl1 = dist(l1.a, P) < 1e-6 ? { ...l1, a: T1 } : { ...l1, b: T1 };
     const nl2 = dist(l2.a, P) < 1e-6 ? { ...l2, a: T2 } : { ...l2, b: T2 };
-    this.app.updateSketch(sk.id, (s) => ({ ...s, curves: [...s.curves.map((c) => (c.id === l1.id ? nl1 : c.id === l2.id ? nl2 : c)), { ...arc, id: uid('c') }] }), 'Sarok lekerekítés', 'sketchFillet');
+    const aid = uid('c');
+    const tc = [{ id: uid('k'), type: 'tangent', a: { curve: aid }, b: { curve: l1.id } }, { id: uid('k'), type: 'tangent', a: { curve: aid }, b: { curve: l2.id } }];
+    this.app.updateSketch(sk.id, (s) => ({ ...s, curves: [...s.curves.map((c) => (c.id === l1.id ? nl1 : c.id === l2.id ? nl2 : c)), { ...arc, id: aid }], constraints: [...(s.constraints || []), ...tc] }), 'Sarok lekerekítés', 'sketchFillet');
   }
 }
 
@@ -962,25 +988,36 @@ export function offsetCurves(curves, d) {
 export class SketchPaletteTool extends LineTool {
   static palette(app) {
     const t = app.tool;
-    const B = (id, icon, label, extra = {}) => ({ icon, label, active: t && t.toolId === id, onTap: () => app.startTool(id, { frame: t && t.lockedFrame ? t.frame : undefined }), ...extra });
+    const frame = t && t.lockedFrame ? t.frame : t && t.frame;
+    const B = (id, icon, label, extra = {}) => ({ icon, label, active: t && t.toolId === id, onTap: () => app.startTool(id, { frame: frame || undefined }), ...extra });
+    // az aktív vázlat neve (a síkon lévő vázlat)
+    let name = 'Új vázlat';
+    if (frame) {
+      const sk = app.sketches.findSketchOnPlane(frame);
+      if (sk) name = sk.name;
+    }
+    const cur = app.tool && app.tool.toolId;
+    const more = [
+      ['tangentArc', 'arcTangent', 'Érintő ív'], ['rectCenter', 'rectCenter', 'Téglalap középről'], ['polygon', 'polygon', 'Sokszög'],
+      ['slot', 'slot', 'Hosszlyuk'], ['point', 'point', 'Pont'], ['freehand', 'freehand', 'Szabadkézi (alakfelismerés)'],
+      ['sketchFillet', 'sketchFillet', 'Sarok lekerekítés'], ['offsetCurve', 'offsetCurve', 'Görbe eltolás (kijelöltek)'],
+    ];
+    const moreActive = more.some((m) => m[0] === cur);
+    const selCount = app.sel.filter((s) => s.type === 'curve' || s.type === 'spoint' || s.type === 'region').length;
     return [
-      { icon: 'check', label: 'Vázlat kész', onTap: () => app.setTool(null) },
+      { icon: 'close', label: 'Vázlatból kilépés', sub: name, onTap: () => app.exitSketchMode() },
       '-',
       B('line', 'line', 'Vonal', { kbd: 'L' }),
-      B('rect', 'rect', 'Téglalap', { kbd: 'R' }),
-      B('rectCenter', 'rectCenter', 'Téglalap középről'),
-      B('circle', 'circle', 'Kör', { kbd: 'C' }),
       B('arc', 'arc', 'Ív', { kbd: 'A' }),
-      B('tangentArc', 'arcTangent', 'Érintő ív'),
-      B('spline', 'spline', 'Spline', { kbd: 'S' }),
-      B('polygon', 'polygon', 'Sokszög', { kbd: 'P' }),
-      B('slot', 'slot', 'Hosszlyuk'),
+      B('spline', 'spline', 'Spline', { kbd: 'S', sub: 'Illesztett' }),
+      B('rect', 'rect', 'Téglalap', { kbd: 'R', sub: 'Átlós' }),
+      B('circle', 'circle', 'Kör', { kbd: 'C' }),
       B('ellipse', 'ellipse', 'Ellipszis'),
-      B('point', 'point', 'Pont'),
-      B('freehand', 'freehand', 'Szabadkézi'),
+      { icon: 'dots', label: 'Továbbiak', menu: true, active: moreActive, onTap: (tile) => app.ui.menu(tile, more.map(([id, ic, l]) => ({ icon: ic, label: l, checked: cur === id, onTap: () => app.startTool(id, { frame: frame || undefined }) }))) },
       '-',
       B('trim', 'trim', 'Vágás', { kbd: 'T' }),
-      B('sketchFillet', 'sketchFillet', 'Sarok lekerekítés'),
+      { icon: 'trash', label: 'Törlés', disabled: !selCount, onTap: () => app.deleteSelection() },
+      { icon: 'construction', label: 'Segédvonal', sub: app.sketchConstruction ? 'Be' : 'Ki', active: !!app.sketchConstruction, onTap: () => { app.sketchConstruction = !app.sketchConstruction; app.updateToolbar(); app.tool && app.tool.refreshPanel && app.tool.refreshPanel(); } },
     ];
   }
 }
@@ -1002,3 +1039,10 @@ export const SKETCH_TOOLS = {
   sketchFillet: SketchFilletTool,
   offsetCurve: OffsetCurveTool,
 };
+
+/** Vázlat módban az ujjal koppintás kijelöl (vázlatgörbe, pont, régió) – a Pencil rajzol. */
+export function touchSelect(app, ev) {
+  const it = app.pickItem(ev, { edges: false, faces: false });
+  if (it && it.sketchId) app.toggleSelect(it);
+  else if (!it) app.clearSelection();
+}

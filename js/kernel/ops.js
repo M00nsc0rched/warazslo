@@ -711,11 +711,11 @@ OPS.importFile = async ({ format, data, name }) => {
   return { results, removed: [] };
 };
 
-OPS.exportFile = async ({ format, bodies, names, colors, tolerance }, ctx) => {
+OPS.exportFile = async ({ format, bodies, names, colors, tolerance, unit }, ctx) => {
   const shapes = bodies.map((b) => ctx.body(b));
   let blob;
   if (format === 'step') {
-    blob = R.exportSTEP(shapes.map((shape, i) => ({ shape, name: names?.[i] || `Test ${i + 1}`, color: colors?.[i] })), { unit: 'MM', modelUnit: 'MM' });
+    blob = R.exportSTEP(shapes.map((shape, i) => ({ shape, name: names?.[i] || `Test ${i + 1}`, color: colors?.[i] })), { unit: unit || 'MM', modelUnit: 'MM' });
   } else if (format === 'stl') {
     const comp = shapes.length === 1 ? shapes[0] : makeCompound(shapes);
     blob = comp.blobSTL({ binary: true, tolerance: tolerance || 0.01, angularTolerance: 0.1 });
@@ -850,4 +850,18 @@ OPS.compose = async (args, ctx) => {
   }
   if (!shapes.length) throw new KernelError('Üres eredmény');
   return applyTool(fuseAll(shapes), args.op || 'new', args.targets || [], ctx, args.name);
+};
+
+/** Exporthoz finom háló adott tűréssel (3MF, GLB, OBJ). */
+OPS.exportMesh = ({ bodies, tolerance = 0.01, angularTolerance = 0.1 }, ctx) => {
+  const out = [];
+  const transfer = [];
+  for (const b of bodies) {
+    const s = ctx.body(b);
+    const m = s.mesh({ tolerance, angularTolerance });
+    const v = new Float32Array(m.vertices), n = new Float32Array(m.normals), t = new Uint32Array(m.triangles);
+    out.push({ id: b.id, vertices: v, normals: n, triangles: t });
+    transfer.push(v.buffer, n.buffer, t.buffer);
+  }
+  return { info: out, transfer };
 };

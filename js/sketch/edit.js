@@ -1,7 +1,8 @@
 // Vázlat szerkesztése: pontok húzása, méretek megadása
 import { dist, polar, TAU } from './geom2d.js';
 import { planeFromJSON, toWorld } from './manager.js';
-import { snap, SnapViz } from './snap.js';
+import { snap, SnapViz } from "./snap.js";
+import { solveSketch } from "./solver.js";
 import { fmtLen } from '../util/units.js';
 
 const EPS = 1e-6;
@@ -107,7 +108,9 @@ export class PointDrag {
     const np = s.p;
     if (dist(np, this.cur) < 1e-12) return;
     this.cur = np;
-    const curves = movePoint(this.sketch0, this.p0, np);
+    // kényszermegoldóval: a húzott pont a célba kerül, a többi a lehető legkevésbé mozdul
+    const res = solveSketch(this.sketch0, null, { drag: { point: this.p0, to: np }, wantDof: false });
+    const curves = res.curves;
     const st = this.app.doc.state;
     const ns = { ...st, sketches: st.sketches.map((x) => (x.id === this.sketchId ? { ...x, curves } : x)) };
     if (!this.committed) { this.app.doc.commit('Pont mozgatása', ns, { icon: 'point' }); this.committed = true; }

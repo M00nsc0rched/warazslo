@@ -11,6 +11,7 @@ export function emptyState() {
     sketches: [],   // { id, name, plane:{origin,xDir,yDir,normal}, curves:[] }
     planes: [],     // { id, name, origin, xDir, yDir, normal, size }
     images: [],     // referencia képek { id, name, dataUrl, plane, w, h, opacity }
+    variables: [],  // { name, expr }
     counters: { body: 0, sketch: 0, plane: 0, image: 0 },
     meta: { material: 'plastic' },
   };

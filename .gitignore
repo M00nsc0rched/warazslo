@@ -9,3 +9,14 @@ ikon_illusztracio.jpeg
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# a projekt gyökerébe tett képek (utasítások, minták) sosem kerülnek a repóba
+/*.png
+/*.PNG
+/*.jpg
+/*.JPG
+/*.jpeg
+/*.JPEG
+/*.webp
+/*.heic
+/*.HEIC

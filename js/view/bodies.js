@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { materialById, createMaterial, ensureBoxUV } from './materials.js';
 
 export const ACCENT = new THREE.Color('#2bb8f0');
 const HOVER = new THREE.Color('#8fd9ff');
@@ -56,7 +57,26 @@ export class BodyGfx {
     this.bbox = geo.boundingBox.clone();
   }
 
-  setColor(c) { this.material.color.set(c); }
+  setColor(c) { if (!this.matId) this.material.color.set(c); }
+
+  /** Megjelenés: modellező szín vagy könyvtári anyag (vizualizáció). */
+  setAppearance(color, matId) {
+    const key = matId ? `|` : null;
+    if (key === this.appearanceKey) { if (!matId) this.material.color.set(color); return false; }
+    this.appearanceKey = key;
+    this.matId = matId || null;
+    const def = matId ? materialById(matId) : null;
+    const old = this.material;
+    if (def) {
+      this.material = createMaterial(def);
+      if (this.material.userData.needsUV) ensureBoxUV(this.geo, this.material.userData.texScale);
+    } else {
+      this.material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color || '#c3c7ea'), roughness: 0.5, metalness: 0.04, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, side: THREE.DoubleSide });
+    }
+    this.mesh.material = this.material;
+    if (old !== this.material) old.dispose();
+    return true;
+  }
 
   faceOfTriangle(t) { return this.triFace[t] ?? -1; }
 
@@ -170,7 +190,7 @@ export class BodiesView {
         this._applyMode(g);
       }
       if (g) {
-        g.setColor(b.color);
+        if (g.setAppearance(b.color, this.showMaterials ? b.material : null)) this._applyMode(g);
         g.group.visible = b.visible && !this.hiddenByPreview.has(b.id);
         g.visibleFlag = b.visible;
       }

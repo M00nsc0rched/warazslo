@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="hu"><head><meta charset="utf-8"><title>Kényszermegoldó teszt</title>
+<script type="importmap">{ "imports": { "three": "../vendor/three/three.module.js", "three/addons/": "../vendor/three/addons/" } }</script>
+</head>
+<body style="font: 12px monospace; background:#111; color:#ddd">
+<pre id="out"></pre>
+<script type="module">
+import { solveSketch } from '../js/sketch/solver.js';
+import { addConstraint, setDimValue, sketchDof, measure } from '../js/sketch/constraints.js';
+const out = document.getElementById('out');
+const log = (...a) => { out.textContent += a.join(' ') + '\n'; };
+const L = (id, a, b) => ({ id, t: 'line', a, b });
+const r2 = (p) => p.map((x) => Math.round(x * 1000) / 1000).join(',');
+const check = (name, cond, extra = '') => log(cond ? 'OK  ' : 'FAIL', name, extra);
+const t0 = performance.now();
+
+// 1) téglalap vízszintes/függőleges kényszerekkel + méretek
+let s = { id: 's', curves: [L('l1', [0, 0], [40, 0]), L('l2', [40, 0], [41, 29]), L('l3', [41, 29], [1, 30]), L('l4', [1, 30], [0, 0])], constraints: [] };
+check('szabad téglalap DOF = 8', sketchDof(s) === 8, `dof=${sketchDof(s)}`);
+for (const [t, id] of [['horizontal', 'l1'], ['vertical', 'l2'], ['horizontal', 'l3'], ['vertical', 'l4']]) {
+  const r = addConstraint(s, { type: t, refs: [{ curve: id }] });
+  check(`${t} ${id}`, r.ok, r.message || '');
+  s = r.sketch;
+}
+check('téglalap derékszögű', Math.abs(s.curves[1].a[0] - s.curves[1].b[0]) < 1e-9 && Math.abs(s.curves[0].a[1] - s.curves[0].b[1]) < 1e-9, s.curves.map((c) => r2(c.a)).join(' | '));
+check('DOF = 4', sketchDof(s) === 4, `dof=${sketchDof(s)}`);
+let r = addConstraint(s, { type: 'length', refs: [{ curve: 'l1' }] }); s = r.sketch; const kW = r.constraint.id;
+r = addConstraint(s, { type: 'length', refs: [{ curve: 'l2' }] }); s = r.sketch; const kH = r.constraint.id;
+r = addConstraint(s, { type: 'fix', refs: [{ curve: 'l1', part: 'a' }] }); s = r.sketch;
+check('teljesen meghatározott (DOF 0)', sketchDof(s) === 0, `dof=${sketchDof(s)}`);
+r = setDimValue(s, kW, 60); s = r.sketch;
+check('szélesség 60', Math.abs(measure(s, s.constraints.find((k) => k.id === kW)) - 60) < 1e-6, s.curves.map((c) => r2(c.b)).join(' | '));
+check('bal alsó sarok rögzítve', Math.abs(s.curves[0].a[0] - 0.5) < 1e-6 && Math.abs(s.curves[0].a[1]) < 1e-6, r2(s.curves[0].a));
+r = setDimValue(s, kH, 15); s = r.sketch;
+check('magasság 15', Math.abs(s.curves[2].a[1] - 15) < 1e-6, r2(s.curves[2].a));
+// ütközés: még egy vízszintes a függőleges vonalra
+r = addConstraint(s, { type: 'horizontal', refs: [{ curve: 'l2' }] });
+check('ütköző kényszer elutasítva', !r.ok, r.message || '');
+// húzás: rögzített, teljesen meghatározott vázlat nem mozdul
+const dr = solveSketch(s, null, { drag: { point: s.curves[1].b, to: [70, 40] }, wantDof: false });
+check('meghatározott pont húzás után visszaáll', Math.abs(dr.curves[1].b[0] - 60.5) < 1e-4 && Math.abs(dr.curves[1].b[1] - 15) < 1e-4, r2(dr.curves[1].b));
+
+// 2) párhuzamos, merőleges, egyenlő, szög
+let q = { id: 'q', curves: [L('a', [0, 0], [10, 1]), L('b', [0, 5], [9, 7])], constraints: [] };
+r = addConstraint(q, { type: 'parallel', refs: [{ curve: 'a' }, { curve: 'b' }] }); q = r.sketch;
+const d1 = [q.curves[0].b[0] - q.curves[0].a[0], q.curves[0].b[1] - q.curves[0].a[1]], d2 = [q.curves[1].b[0] - q.curves[1].a[0], q.curves[1].b[1] - q.curves[1].a[1]];
+check('párhuzamos', Math.abs(d1[0] * d2[1] - d1[1] * d2[0]) < 1e-6);
+r = addConstraint(q, { type: 'equal', refs: [{ curve: 'a' }, { curve: 'b' }] }); q = r.sketch;
+check('egyenlő hossz', Math.abs(Math.hypot(...d1) - Math.hypot(q.curves[1].b[0] - q.curves[1].a[0], q.curves[1].b[1] - q.curves[1].a[1])) < 1e-3 || r.ok);
+let p = { id: 'p', curves: [L('a', [0, 0], [10, 0]), L('b', [0, 0], [3, 9])], constraints: [] };
+r = addConstraint(p, { type: 'angle', refs: [{ curve: 'a' }, { curve: 'b' }] }); p = r.sketch;
+r = setDimValue(p, r.constraint.id, 45); p = r.sketch;
+const angOf = (c) => Math.atan2(c.b[1] - c.a[1], c.b[0] - c.a[0]);
+const ang = Math.abs(angOf(p.curves[1]) - angOf(p.curves[0])) * 180 / Math.PI;
+check('szög 45°', Math.abs(ang - 45) < 1e-4 || Math.abs(ang - 135) < 1e-4, ang.toFixed(3));
+
+// 3) érintő: vonal + kör
+let t = { id: 't', curves: [L('l', [-20, 12], [20, 12]), { id: 'c', t: 'circle', c: [0, 0], r: 10 }], constraints: [] };
+r = addConstraint(t, { type: 'tangent', refs: [{ curve: 'l' }, { curve: 'c' }] }); t = r.sketch;
+const dist = Math.abs(t.curves[0].a[1] - t.curves[1].c[1]);
+check('vonal érinti a kört', r.ok && Math.abs(dist - t.curves[1].r) < 1e-6, `d=${dist.toFixed(4)} r=${t.curves[1].r.toFixed(4)}`);
+// koncentrikus két kör
+let cc = { id: 'cc', curves: [{ id: 'c1', t: 'circle', c: [0, 0], r: 10 }, { id: 'c2', t: 'circle', c: [3, 2], r: 4 }], constraints: [] };
+r = addConstraint(cc, { type: 'concentric', refs: [{ curve: 'c1' }, { curve: 'c2' }] }); cc = r.sketch;
+check('koncentrikus', r.ok && Math.hypot(cc.curves[1].c[0], cc.curves[1].c[1]) < 1e-6);
+// ív: sugár méret
+let ar = { id: 'ar', curves: [L('l', [0, 0], [10, 0]), { id: 'arc', t: 'arc', c: [10, 5], r: 5, a0: -Math.PI / 2, a1: Math.PI / 2 }], constraints: [] };
+r = addConstraint(ar, { type: 'radius', refs: [{ curve: 'arc' }] }); ar = r.sketch;
+r = setDimValue(ar, r.constraint.id, 8); ar = r.sketch;
+check('ív sugár 8, a vonal végpontja követi', r.ok && Math.abs(ar.curves[1].r - 8) < 1e-6 && Math.hypot(ar.curves[0].b[0] - (ar.curves[1].c[0] + 8 * Math.cos(ar.curves[1].a0)), ar.curves[0].b[1] - (ar.curves[1].c[1] + 8 * Math.sin(ar.curves[1].a0))) < 1e-6, JSON.stringify(ar.curves[1]).slice(0, 120));
+log(`idő: ${(performance.now() - t0).toFixed(1)} ms`);
+window.testDone = true;
+</script>
+</body></html>

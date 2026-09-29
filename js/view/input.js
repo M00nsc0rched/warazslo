@@ -87,9 +87,11 @@ export class InputController {
       if (n === 1) {
         if (this.cube.contains(x, y)) { p.mode = 'cube'; return; }
         const ev = this._ev(e, p);
-        if (this.h.down(ev)) { p.mode = 'app'; return; }
+        if (this.h.down(ev)) { p.mode = 'app'; this._armLong(p, ev); return; }
         p.mode = 'pending';
+        this._armLong(p, ev);
       } else {
+        for (const q of this.ptrs.values()) this._disarmLong(q);
         // második ujj: az egyujjas művelet megszakítása, két ujjas navigáció
         for (const q of this.ptrs.values()) {
           if (q.type !== 'touch' || q === p) continue;
@@ -110,9 +112,27 @@ export class InputController {
       return;
     }
     const ev = this._ev(e, p);
-    if (this.h.down(ev)) { p.mode = 'app'; return; }
+    if (this.h.down(ev)) { p.mode = 'app'; this._armLong(p, ev); return; }
     p.mode = type === 'mouse' ? 'pending-mouse' : 'pending-pen';
+    this._armLong(p, ev);
   }
+
+  /** Hosszú nyomás: ~0,5 mp mozdulatlan érintés / toll. */
+  _armLong(p, ev) {
+    this._disarmLong(p);
+    if (p.mode === 'app' && !(this.h.canLongPress && this.h.canLongPress())) return;
+    p.lp = setTimeout(() => {
+      p.lp = 0;
+      if (!this.ptrs.has(p.id) || p.moved) return;
+      if (p.mode === 'app') this.h.cancel && this.h.cancel({ ...ev, x: p.x, y: p.y });
+      p.mode = 'long';
+      p.longFired = true;
+      if (this.session) this.session.moved = true;
+      this.h.longPress && this.h.longPress({ ...ev, x: p.x, y: p.y });
+    }, 520);
+  }
+
+  _disarmLong(p) { if (p && p.lp) { clearTimeout(p.lp); p.lp = 0; } }
 
   _penDown() {
     for (const p of this.ptrs.values()) if (p.type === 'pen') return true;
@@ -143,6 +163,7 @@ export class InputController {
     const tol = MOVE_TOL[p.type] || 5;
     if (!p.moved && Math.hypot(x - p.x0, y - p.y0) > tol) {
       p.moved = true;
+      this._disarmLong(p);
       if (this.session && p.type === 'touch') this.session.moved = true;
     }
     const dx = x - p.lx, dy = y - p.ly;
@@ -197,6 +218,7 @@ export class InputController {
     const p = this.ptrs.get(e.pointerId);
     if (!p) return;
     this.ptrs.delete(e.pointerId);
+    this._disarmLong(p);
     try { this.vp.canvas.releasePointerCapture(e.pointerId); } catch (err) { /* */ }
     const ev = this._ev(e, p);
     const quick = e.timeStamp - p.t0 < TAP_MS;

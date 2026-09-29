@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import * as sheets from "../ui/sheets.js";
 import { icon } from "../ui/icons.js";
 import { onTap } from "../util/misc.js";
+import { sketchSelection, applicable, CONSTRAINTS, disconnectPoint, sketchDof } from '../sketch/constraints.js';
+import { applyConstraint, addDefaultDimension } from '../sketch/annotate.js';
 import { ExtrudeTool } from './extrude.js';
 import { FilletTool } from './fillet.js';
 import { ShellTool, OffsetFaceTool } from './shell.js';
@@ -109,7 +111,7 @@ export function buildLeftToolbar(app) {
       if (c.body >= 2) ctx.push(T('boolean', 'boolean', 'Boole-műveletek', { kbd: 'B', sub: 'Egyesítés, kivonás' }));
       ctx.push(T('shell', 'shell', 'Héjazás', { sub: 'Üreges test' }));
       ctx.push(T('split', 'split', 'Szétvágás'));
-      ctx.push({ icon: 'palette', label: 'Szín', menu: true, onTap: (t) => sheets.colorMenu(app, t) });
+      ctx.push({ icon: 'palette', label: 'Anyag és szín', onTap: () => sheets.materialSheet(app) });
       ctx.push({ icon: 'copy', label: 'Másolat', onTap: () => sheets.duplicateBodies(app) });
       ctx.push({ icon: 'exportFile', label: 'Exportálás', menu: true, onTap: (t) => sheets.exportMenu(app, t, true) });
     } else if (hasProfiles) {
@@ -126,7 +128,15 @@ export function buildLeftToolbar(app) {
         ctx.push(T('sweep', 'sweep', 'Söprés útvonal'));
       }
       ctx.push(T('move', 'move', 'Mozgatás/Forgatás', { kbd: 'M' }));
-      if (c.curve === 1 || c.spoint) ctx.push({ icon: 'rename', label: 'Méret megadása', onTap: () => sheets.editDimension(app) });
+      // kényszerek és méretek a kijelölt vázlatelemekre
+      const ss = sketchSelection(app);
+      const opts = applicable(ss);
+      if (opts.some((o) => CONSTRAINTS[o.type].dim)) ctx.push({ icon: 'dimension', label: 'Méret', kbd: 'K', onTap: () => addDefaultDimension(app) });
+      const geo = opts.filter((o) => !CONSTRAINTS[o.type].dim);
+      if (geo.length) {
+        ctx.push('-');
+        for (const o of geo) ctx.push({ icon: CONSTRAINTS[o.type].icon || 'dimension', label: CONSTRAINTS[o.type].label, onTap: () => applyConstraint(app, o) });
+      }
     } else if (only('plane')) {
       ctx.push({ icon: 'sketch', label: 'Vázlat a síkon', onTap: () => sketchOnSelection(app) });
       ctx.push(T('section', 'section', 'Metszet itt'));
@@ -173,6 +183,7 @@ function buildViewToolbar(app, top, sum, tool) {
     '-',
     { icon: 'rotate', label: 'Körbeforgatás', sub: vp.autoRotate ? 'Be' : 'Ki', active: !!vp.autoRotate, onTap: () => { vp.setAutoRotate(!vp.autoRotate); app.updateToolbar(); } },
     { icon: 'display', label: 'Megjelenítés', sub: sheets.displayName(app.settings.display), onTap: (t) => sheets.displayMenu(app, t) },
+    { icon: 'palette', label: 'Anyagok', sub: sum.n ? 'Kijelölt testek' : 'Jelölj ki testet', onTap: () => sheets.materialSheet(app) },
     { icon: 'isolate', label: 'Izolálás', sub: app.isolated ? 'Be' : sum.n ? 'Kijelölt' : 'Ki', active: !!app.isolated, onTap: () => sheets.toggleIsolate(app) },
     { icon: 'info', label: 'Tömeg és térfogat', onTap: () => sheets.showProperties(app) },
     { icon: 'ar', label: 'AR nézet', sub: 'USDZ', onTap: (t) => sheets.exportMenu(app, t, false) },
@@ -207,11 +218,7 @@ function sketchOnSelection(app) {
     frame = sheets.frameFromPlane(app.doc.plane(s.planeId));
   }
   if (!frame) return;
-  app.vp.setGridFrame(frame);
-  app.clearSelection();
-  // nézet a síkra merőlegesen
-  app.vp.setViewDirection(frame.normal.clone(), true, Math.abs(frame.normal.z) > 0.9 ? frame.yDir.clone() : null);
-  app.startTool('line', { frame });
+  app.enterSketchMode(frame);
 }
 
 // ---------------------------------------------------------------- menük
@@ -260,6 +267,8 @@ function constructMenu(app, anchor) {
     { icon: 'planeOffset', label: 'Sík eltolással', onTap: () => app.startTool('plane', { mode: 'offset' }) },
     { icon: 'plane', label: 'Sík 3 ponton át', onTap: () => app.startTool('plane', { mode: 'three' }) },
     { icon: 'plane', label: 'Felező sík (két lap közt)', onTap: () => app.startTool('plane', { mode: 'mid' }) },
+    { head: 'Paraméterek' },
+    { icon: 'variables', label: 'Változók', onTap: () => sheets.openVariables(app) },
     { head: 'Rácssík (vázlatsík)' },
     { icon: 'plane', label: 'Felülnézet sík (XY)', onTap: () => sheets.setGridPlane(app, 'XY') },
     { icon: 'plane', label: 'Elölnézet sík (XZ)', onTap: () => sheets.setGridPlane(app, 'XZ') },
@@ -321,6 +330,69 @@ export function buildRightToolbar(app) {
       { icon: 'camera', label: 'Képernyőkép', onTap: () => sheets.screenshot(app) },
       { icon: 'history', label: 'Előzmények', onTap: () => sheets.toggleHistory(app) },
       { icon: 'settings', label: 'Beállítások', onTap: () => sheets.openSettings(app) },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------- vázlat mód: kényszeroszlop (jobb oldal)
+export function buildSketchBar(app) {
+  const t = app.tool;
+  if (!t || !t.isSketchTool || app.mode === 'view') return null;
+  const ss = sketchSelection(app);
+  const opts = applicable(ss);
+  const find = (type) => opts.find((o) => o.type === type);
+  const act = (o) => () => applyConstraint(app, o);
+  const B = (type, label, kbd, o, icon) => ({ icon: icon || CONSTRAINTS[type]?.icon || 'dimension', label, kbd, disabled: !o, onTap: o ? (typeof o === 'function' ? o : act(o)) : () => {} });
+  // vízszintes/függőleges: a jelenlegi irány szerint
+  let hv = null;
+  const h = find('horizontal'), v = find('vertical');
+  if (h && v && ss) {
+    let dx = 0, dy = 0;
+    if (ss.lines.length === 1) { const c = ss.sketch.curves.find((x) => x.id === ss.lines[0].curve); dx = c.b[0] - c.a[0]; dy = c.b[1] - c.a[1]; }
+    else if (ss.points.length === 2) {
+      const P = (r) => { const c = ss.sketch.curves.find((x) => x.id === r.curve); return (c.t === 'line' ? (r.part === 'a' ? c.a : c.b) : c.c || c.p) || [0, 0]; };
+      const a = P(ss.points[0]), b = P(ss.points[1]); dx = b[0] - a[0]; dy = b[1] - a[1];
+    }
+    hv = Math.abs(dx) >= Math.abs(dy) ? h : v;
+  }
+  const coin = find('coincident') || find('onCurve');
+  // szétválasztás: egyetlen kijelölt pont, amiben több görbe találkozik
+  let disc = null;
+  const sp = app.sel.filter((s) => s.type === 'spoint');
+  if (sp.length === 1 && app.sel.length === 1) {
+    const sk = app.doc.sketch(sp[0].sketchId);
+    const n = sk ? sk.curves.filter((c) => c.t !== 'point').filter((c) => {
+      const ends = c.t === 'line' ? [c.a, c.b] : c.t === 'arc' ? [[c.c[0] + c.r * Math.cos(c.a0), c.c[1] + c.r * Math.sin(c.a0)], [c.c[0] + c.r * Math.cos(c.a1), c.c[1] + c.r * Math.sin(c.a1)]] : c.pts ? [c.pts[0], c.pts[c.pts.length - 1]] : [];
+      return ends.some((q) => Math.abs(q[0] - sp[0].p[0]) < 1e-6 && Math.abs(q[1] - sp[0].p[1]) < 1e-6);
+    }).length : 0;
+    if (n >= 2) disc = () => {
+      const g = (app.vp.gridSpacing || 1) * 0.6;
+      app.updateSketch(sk.id, (s) => disconnectPoint(s, sp[0].p, g), 'Szétválasztás', 'coincident');
+      app.clearSelection();
+    };
+  }
+  const curvesSel = app.sel.some((s) => s.type === 'curve');
+  const dimOpt = opts.find((o) => CONSTRAINTS[o.type].dim);
+  const sketch = ss ? ss.sketch : app.sketches.findSketchOnPlane(t.frame || app.vp.gridFrame);
+  let dof = null;
+  if (sketch && sketch.curves.length && sketch.curves.length < 400) dof = sketchDof(sketch);
+  return {
+    title: 'Kényszerek', dof,
+    items: [
+      B('parallel', 'Párhuzamos', '⇧A', find('parallel')),
+      B('perpendicular', 'Merőleges', '⇧P', find('perpendicular')),
+      B('tangent', 'Érintő', '⇧T', find('tangent')),
+      B('coincident', coin && coin.type === 'onCurve' ? 'Pont a görbén' : 'Egybeeső', '⇧N', coin),
+      B('midpoint', 'Felezőpont', '⇧M', find('midpoint')),
+      B('concentric', 'Koncentrikus', '⇧C', find('concentric')),
+      B('horizontal', 'Vízszintes/Függőleges', '⇧V', hv),
+      B('equal', 'Egyenlő', '⇧E', find('equal')),
+      B('symmetric', 'Szimmetria', '⇧S', find('symmetric')),
+      B('coincident', 'Szétválasztás', '', disc, 'disconnect'),
+      B('fix', 'Rögzítés', '⇧L', find('fix'), 'lock'),
+      B('construction', 'Segédvonallá', '', curvesSel ? () => sheets.toggleConstruction(app) : null, 'construction'),
+      '-',
+      B('length', 'Méret', 'K', dimOpt ? () => addDefaultDimension(app) : null, 'dimension'),
     ],
   };
 }

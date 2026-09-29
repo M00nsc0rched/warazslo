@@ -488,8 +488,9 @@ export class HandleManager {
       const p = this.vp.project(b.world);
       if (p.behind) { b.elm.style.display = 'none'; continue; }
       b.elm.style.display = '';
-      const x = Math.max(40, Math.min(this.vp.width - 40, p.x));
-      const y = Math.max(20, Math.min(this.vp.height - 20, p.y));
+      const hw = (b.elm.offsetWidth || 80) / 2 + 6, hh = (b.elm.offsetHeight || 24) / 2 + 6;
+      const x = Math.max(hw, Math.min(this.vp.width - hw, p.x));
+      const y = Math.max(hh, Math.min(this.vp.height - hh, p.y));
       b.elm.style.left = `${x}px`;
       b.elm.style.top = `${y}px`;
     }

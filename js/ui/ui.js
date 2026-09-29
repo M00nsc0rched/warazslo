@@ -94,6 +94,23 @@ export class UI {
     return this.cubeSlot;
   }
 
+  /** Vázlat módban a jobb oldali kényszeroszlop (null = elrejtés). */
+  renderSketchBar(spec) {
+    if (!this.sketchBar) {
+      this.sketchBar = el('div', { id: 'sketchbar' });
+      this.root.append(this.sketchBar);
+    }
+    const bar = this.sketchBar;
+    bar.innerHTML = '';
+    bar.style.display = spec ? '' : 'none';
+    if (!spec) return;
+    if (spec.title) bar.append(el('div', { class: 'sb-title' }, el('span', { text: spec.title }), spec.dof != null ? el('span', { class: `dof-pill ${spec.dof === 0 ? 'ok' : ''}`, text: spec.dof === 0 ? 'meghatározott' : `${spec.dof} szabadsági fok` }) : null));
+    for (const b of spec.items) {
+      if (b === '-') { bar.append(el('div', { class: 'sep', style: { alignSelf: 'flex-end' } })); continue; }
+      bar.append(this.button({ ...b, side: 'right' }));
+    }
+  }
+
   // ---------------------------------------------------------------- eszközpanel
   showPanel(spec, handlers) {
     this.panelSpec = spec;
@@ -210,12 +227,12 @@ export class UI {
   }
 
   // ---------------------------------------------------------------- numerikus billentyűzet
-  keypad({ label, kind = 'len', value, anchor, onDone, onCancel }) {
+  keypad({ label, kind = "len", value, expr, anchor, onDone, onCancel, actions = [] }) {
     this.closeKeypad();
     const unit = kind === 'len' ? LENGTH_UNITS[getUnit()].label : kind === 'angle' ? '°' : '';
     let text = '';
     let fresh = true;
-    const initial = value == null ? '' : kind === 'len' ? fmtLen(value, { unit: false }) : kind === 'angle' ? fmtAngle(value, { unit: false }) : String(value);
+    const initial = expr ? String(expr) : value == null ? "" : kind === "len" ? fmtLen(value, { unit: false }) : kind === "angle" ? fmtAngle(value, { unit: false }) : String(value);
     const disp = el('div', { class: 'kp-display' });
     const prev = el('div', { class: 'kp-preview' });
     const render = () => {
@@ -249,9 +266,9 @@ export class UI {
       const src = fresh ? initial : text;
       if (!src.trim()) { close(); onCancel && onCancel(); return; }
       try {
-        const v = evaluate(src, kind === 'int' ? 'num' : kind);
+        const v = evaluate(src, kind === "int" ? "num" : kind);
         close();
-        onDone && onDone(v);
+        onDone && onDone(v, src.trim());
       } catch (e) {
         disp.classList.add('err');
         prev.textContent = e.message;
@@ -294,7 +311,18 @@ export class UI {
       onTap(cancel, () => { close(); onCancel && onCancel(); });
       grid.insertBefore(cancel, ok);
     }
-    const kp = el('div', { class: 'keypad' }, el('div', { class: 'kp-label', text: label || '' }), disp, prev, grid);
+    const kp = el("div", { class: "keypad" }, el("div", { class: "kp-label", text: label || "" }), disp, prev, grid);
+    const names = this.varNames ? this.varNames() : [];
+    if (names.length) {
+      const vr = el("div", { class: "kp-vars" });
+      for (const nm of names.slice(0, 12)) { const b = el("button", { class: "chip", text: nm }); onTap(b, () => press(nm)); vr.append(b); }
+      kp.insertBefore(vr, grid);
+    }
+    if (actions.length) {
+      const ar = el("div", { class: "kp-actions" });
+      for (const a of actions) { const b = el("button", { class: `btn ${a.style || ""}`, text: a.label }); onTap(b, () => { close(); a.onTap(); }); ar.append(b); }
+      kp.append(ar);
+    }
     const scrim = el('div', { class: 'menu-scrim', style: { zIndex: 59 } });
     scrim.addEventListener('pointerdown', (e) => { e.preventDefault(); commit(); });
     document.body.append(scrim, kp);
