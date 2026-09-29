@@ -130,6 +130,10 @@ export const MAIN_PLANES = {
 /** Tengely egy kijelölt elemből: egyenes él, körél, hengeres lap, vázlatvonal. */
 export function axisFromItem(app, s) {
   if (!s) return null;
+  if (s.type === 'axis') {
+    const ax = (app.doc.state.axes || []).find((a) => a.id === s.axisId);
+    if (ax) return { origin: V3(ax.origin), dir: V3(ax.dir).normalize(), label: ax.name };
+  }
   if (s.type === 'edge') {
     const e = edgeInfo(app, s.bodyId, s.index);
     if (!e) return null;

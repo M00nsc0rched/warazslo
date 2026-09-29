@@ -136,6 +136,8 @@ const P = {
   symmetric: '<path d="M12 3v18" stroke-dasharray="2 2"/><path d="M9 7 4 12l5 5M15 7l5 5-5 5"/>',
   dimension: '<path d="M4 8v8M20 8v8M4 12h16"/><path d="m7 9.5-3 2.5 3 2.5M17 9.5l3 2.5-3 2.5"/>',
   disconnect: '<path d="M4 12h5M15 12h5"/><path d="M9 8.5a3.5 3.5 0 0 1 0 7M15 8.5a3.5 3.5 0 0 0 0 7"/>',
+  replaceFace: '<path d="M4 9 12 4.5 20 9v8l-8 4.5L4 17Z" stroke-opacity=".5"/><path d="M12 4.5v8.5l8-4" fill="#2bb8f0" fill-opacity=".45" stroke="#2bb8f0"/><path d="M15 2.5 21 6" stroke-dasharray="2 2"/>',
+  project: '<path d="M5 4h10l4 4v5" stroke-opacity=".6"/><path d="M3 20h18" stroke="#2bb8f0"/><path d="M7 9v8M12 9v8M17 13v4" stroke-dasharray="1.8 1.8"/>',
   variables: '<path d="M7 20c2 0 3-1.5 3.5-4l2-10C13 4 14 3 16 3"/><path d="M7 10h7"/><path d="m15 13 5 6M20 13l-5 6"/>',
   shadedEdges: '<path d="M4 8.5 12 4l8 4.5v8L12 21l-8-4.5Z" fill="currentColor" fill-opacity=".35"/><path d="M4 8.5 12 13l8-4.5M12 13v8"/>',
 };

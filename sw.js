@@ -2,7 +2,7 @@
 // A VERSION értékét a tools/deploy.ps1 minden kiadásnál automatikusan lépteti.
 // A nagy könyvtárak (CAD kernel ~23 MB) külön, tartós gyorsítótárban vannak: csak a
 // VENDOR_VERSION változásakor töltődnek le újra.
-const VERSION = 'v20260929-150253';
+const VERSION = 'v20260929-151628';
 const VENDOR_VERSION = 'three186-replicad110';
 const APP_CACHE = `warazslo-app-${VERSION}`;
 const VENDOR_CACHE = `warazslo-vendor-${VENDOR_VERSION}`;

@@ -18,7 +18,7 @@ const deg = (r) => (r * 180) / Math.PI;
 const rad = (d) => (d * Math.PI) / 180;
 
 // ---------------------------------------------------------------- előnézeti vonalak
-class PreviewLines {
+export class PreviewLines {
   constructor(app, color = 0x2bb8f0, width = 2.6, dashed = false) {
     this.app = app;
     this.line = new LineSegments2(new LineSegmentsGeometry(), new LineMaterial({ color, linewidth: width, worldUnits: false, depthTest: false, transparent: true, opacity: 0.95, dashed, dashSize: 4, gapSize: 3 }));

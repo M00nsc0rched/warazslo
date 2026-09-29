@@ -132,6 +132,16 @@ export class OffsetFaceTool extends KernelTool {
     return { body: refOf(this.app, this.bodyId), faces: this.faces, distance: this.d };
   }
 
+  /** A művelet után az eltolt lapok kijelölve maradnak (folytatható tolás/húzás). */
+  reselectAfter() {
+    return this.faces.map((i) => {
+      const f = faceInfo(this.app, this.bodyId, i);
+      if (!f) return null;
+      const c = f.type === "PLANE" ? f.center.map((x, k) => x + f.normal[k] * this.d) : f.center;
+      return { bodyId: this.bodyId, type: f.type, normal: f.type === "PLANE" ? f.normal : null, center: c };
+    }).filter(Boolean);
+  }
+
   update() { this.requestPreview(); this.refreshPanel(); }
 
   panel() {

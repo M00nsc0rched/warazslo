@@ -21,24 +21,27 @@ import { SectionTool } from './section.js';
 import { PlaneTool } from './plane.js';
 import { GearTool } from './gear.js';
 import { SKETCH_TOOLS, SketchPaletteTool } from '../sketch/tools.js';
+import { ReplaceFaceTool, ProjectTool, AlignTool, AxisTool } from './extra.js';
 
 const REGISTRY = {
   extrude: ExtrudeTool, fillet: FilletTool, chamfer: FilletTool, shell: ShellTool, offsetFace: OffsetFaceTool,
   move: MoveTool, scale: ScaleTool, primitive: PrimitiveTool, boolean: BooleanTool, mirror: MirrorTool,
   pattern: PatternTool, revolve: RevolveTool, sweep: SweepTool, loft: LoftTool, split: SplitTool, hole: HoleTool,
   measure: MeasureTool, section: SectionTool, plane: PlaneTool, gear: GearTool, sketch: SketchPaletteTool,
+  replaceFace: ReplaceFaceTool, project: ProjectTool, offsetEdge: ProjectTool, align: AlignTool, axis: AxisTool,
   ...SKETCH_TOOLS,
 };
 
 export function createTool(app, id, opts = {}) {
   if (id === 'chamfer') opts = { ...opts, mode: 'chamfer' };
+  if (id === 'offsetEdge') opts = { ...opts, offset: true };
   const C = REGISTRY[id];
   if (!C) throw new Error(`Ismeretlen eszköz: ${id}`);
   return new C(app, opts);
 }
 
 // ---------------------------------------------------------------- kijelölés összegzés
-const NAMES = { face: 'lap', edge: 'él', vertex: 'csúcs', body: 'test', region: 'régió', curve: 'görbe', spoint: 'pont', sketch: 'vázlat', plane: 'sík' };
+const NAMES = { face: 'lap', edge: 'él', vertex: 'csúcs', body: 'test', region: 'régió', curve: 'görbe', spoint: 'pont', sketch: 'vázlat', plane: 'sík', axis: 'tengely' };
 
 export function selectionSummary(app, sel) {
   const counts = {};
@@ -94,6 +97,10 @@ export function buildLeftToolbar(app) {
       ctx.push(T('offsetFace', 'offsetFace', 'Lap eltolás', { kbd: 'O' }));
       ctx.push(T('fillet', 'fillet', 'Lekerekítés/Letörés', { kbd: 'F', sub: 'A lap élei' }));
       ctx.push(T('shell', 'shell', 'Héjazás', { kbd: 'H', sub: 'Lap eltávolítása' }));
+      if (sum.planarFaces) ctx.push(T('replaceFace', 'replaceFace', 'Lap cseréje', { sub: 'Másik lap síkjáig' }));
+      if (sum.planarFaces) ctx.push(T('align', 'align', 'Illesztés', { sub: 'Lap a laphoz' }));
+      ctx.push(T('offsetEdge', 'offsetCurve', 'Él eltolás', { sub: 'Vázlatba' }));
+      ctx.push(T('project', 'project', 'Vetítés', { sub: 'Élek vázlatba' }));
       if (sum.planarFaces === 1 && c.face === 1) {
         ctx.push({ icon: 'sketch', label: 'Vázlat a lapra', onTap: () => sketchOnSelection(app) });
         ctx.push(T('hole', 'hole', 'Furat'));
@@ -103,6 +110,8 @@ export function buildLeftToolbar(app) {
       ctx.push(T('fillet', 'fillet', 'Lekerekítés', { kbd: 'F' }));
       ctx.push(T('chamfer', 'chamfer', 'Élletörés'));
       ctx.push(T('sweep', 'sweep', 'Söprés útvonal'));
+      ctx.push(T('project', 'project', 'Vetítés', { sub: 'Élek vázlatba' }));
+      ctx.push(T('axis', 'axis', 'Tengely az élből'));
     } else if (only('body')) {
       ctx.push(T('move', 'move', 'Mozgatás/Forgatás', { kbd: 'M' }));
       ctx.push(T('scale', 'scale', 'Méretezés'));
@@ -267,6 +276,8 @@ function constructMenu(app, anchor) {
     { icon: 'planeOffset', label: 'Sík eltolással', onTap: () => app.startTool('plane', { mode: 'offset' }) },
     { icon: 'plane', label: 'Sík 3 ponton át', onTap: () => app.startTool('plane', { mode: 'three' }) },
     { icon: 'plane', label: 'Felező sík (két lap közt)', onTap: () => app.startTool('plane', { mode: 'mid' }) },
+    { head: 'Szerkesztőtengely' },
+    { icon: 'axis', label: 'Tengely (él, henger, 2 pont)', onTap: () => app.startTool('axis') },
     { head: 'Paraméterek' },
     { icon: 'variables', label: 'Változók', onTap: () => sheets.openVariables(app) },
     { head: 'Rácssík (vázlatsík)' },

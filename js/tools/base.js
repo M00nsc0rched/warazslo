@@ -103,7 +103,7 @@ export class KernelTool extends Tool {
     if (!a) { this.app.setTool(null); return; }
     this.committing = true;
     try {
-      await this.app.commitOp(this.label, this.opName, a, { runner: this.runner, icon: this.icon, after: (s) => this.afterCommit(s) });
+      await this.app.commitOp(this.label, this.opName, a, { runner: this.runner, icon: this.icon, after: (s) => this.afterCommit(s), reselect: this.reselectAfter ? this.reselectAfter() : null });
       this.app.setTool(null);
     } catch (e) {
       this.committing = false;

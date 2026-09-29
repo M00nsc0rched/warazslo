@@ -187,7 +187,8 @@ export class App extends Emitter {
       // tartalmi változás után a kijelölés elavulhat
       this.pruneSelection();
     }
-    await this._syncScene(false);
+    this._lastSync = this._syncScene(false);
+    await this._lastSync;
     this.updateToolbar();
     this._saveDebounced();
     if (this.ui.sheetOpen()) this.ui.refreshSheet();
@@ -249,6 +250,19 @@ export class App extends Emitter {
       mesh.userData.planeId = p.id;
       g.add(grp);
     }
+    // szerkesztőtengelyek
+    for (const ax of this.doc.state.axes || []) {
+      if (hidden.includes(ax.id) || this.mode === "view") continue;
+      const sel = this.sel.some((x) => x.type === "axis" && x.axisId === ax.id);
+      const L = Math.max(60, this.vp.sceneRadius * 2);
+      const o = V(...ax.origin), d = V(...ax.dir).normalize();
+      const geo = new THREE.BufferGeometry().setFromPoints([o.clone().addScaledVector(d, -L), o.clone().addScaledVector(d, L)]);
+      const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: sel ? 0x2bb8f0 : 0xf0c05a, dashSize: 4, gapSize: 3 }));
+      line.computeLineDistances();
+      line.userData.axisId = ax.id;
+      line.raycast = () => {};
+      g.add(line);
+    }
     this.vp.requestRender();
   }
 
@@ -299,6 +313,7 @@ export class App extends Emitter {
       case 'spoint': return `spoint:${it.sketchId}:${it.p[0].toFixed(6)},${it.p[1].toFixed(6)}`;
       case 'sketch': return `sketch:${it.sketchId}`;
       case 'plane': return `plane:${it.planeId}`;
+      case 'axis': return `axis:${it.axisId}`;
       default: return JSON.stringify(it);
     }
   }
@@ -334,6 +349,7 @@ export class App extends Emitter {
         return it.type === 'sketch';
       }
       if (it.planeId) return st.planes.some((p) => p.id === it.planeId);
+      if (it.axisId) return (st.axes || []).some((a) => a.id === it.axisId);
       return false;
     });
     if (ok.length !== this.sel.length) this.setSelection(ok);
@@ -351,7 +367,7 @@ export class App extends Emitter {
     sk.selCurves = curves;
     sk.selPoints = sel.filter((s) => s.type === 'spoint').map((s) => ({ sketchId: s.sketchId, p: s.p }));
     if (this.doc) sk.refreshHighlights();
-    if (this.doc && this.doc.state.planes.length) this._syncPlanes();
+    if (this.doc && (this.doc.state.planes.length || (this.doc.state.axes || []).length)) this._syncPlanes();
     const sum = selectionSummary(this, sel);
     this.ui.setSelectionInfo(sum.text);
     this._updateDimBubble(sel);
@@ -427,6 +443,16 @@ export class App extends Emitter {
     if (sk && sk.type === 'curve') return { type: 'curve', sketchId: sk.sketchId, curveId: sk.curveId, point: sk.point, world: sk.world };
     if (bp.type === 'vertex' || bp.type === 'edge') return mk(bp);
     if (sk && sk.type === 'region') return { type: 'region', sketchId: sk.sketchId, key: sk.key, world: sk.world };
+    // szerkesztőtengelyek (képernyőtávolság)
+    for (const ax of this.doc.state.axes || []) {
+      if ((this.doc.view.hidden || []).includes(ax.id)) continue;
+      const o = V(...ax.origin), d = V(...ax.dir).normalize();
+      const L = Math.max(60, this.vp.sceneRadius * 2);
+      const a = this.vp.project(o.clone().addScaledVector(d, -L)), b = this.vp.project(o.clone().addScaledVector(d, L));
+      const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy;
+      const t = L2 > 0 ? Math.max(0, Math.min(1, ((ev.x - a.x) * dx + (ev.y - a.y) * dy) / L2)) : 0;
+      if (Math.hypot(a.x + t * dx - ev.x, a.y + t * dy - ev.y) < tol) return { type: "axis", axisId: ax.id };
+    }
     // szerkesztősíkok
     const pl = this._pickPlane(ev, surfDepth);
     if (pl) return pl;
@@ -542,7 +568,28 @@ export class App extends Emitter {
     this.sel = [];
     doc.commit(label, state, { icon: opts.icon });
     this._applySelectionVisuals();
+    if (opts.reselect) {
+      await this._lastSync;
+      const items = [];
+      for (const r of opts.reselect) { const idx = this.findFace(r.bodyId, r); if (idx >= 0) items.push({ type: "face", bodyId: r.bodyId, index: idx, rev: this.doc.body(r.bodyId)?.rev }); }
+      if (items.length) this.setSelection(items);
+    }
     return results;
+  }
+
+  /** Lap keresése geometriai jellemzők alapján (típus, normális, középpont) egy test aktuális hálójában. */
+  findFace(bodyId, sig) {
+    const g = this.bodies.gfx.get(bodyId);
+    if (!g || !g.data.faces) return -1;
+    let best = -1, bestD = Infinity;
+    g.data.faces.forEach((f, i) => {
+      if (sig.type && f.type !== sig.type) return;
+      if (sig.normal && f.normal && (f.normal[0] * sig.normal[0] + f.normal[1] * sig.normal[1] + f.normal[2] * sig.normal[2]) < 0.999) return;
+      const c = f.center || [0, 0, 0];
+      const d = Math.hypot(c[0] - sig.center[0], c[1] - sig.center[1], c[2] - sig.center[2]);
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    return best;
   }
 
   undo() {
@@ -637,6 +684,7 @@ export class App extends Emitter {
     const bodyIds = new Set(this.sel.filter((s) => s.type === 'body').map((s) => s.bodyId));
     const sketchIds = new Set(this.sel.filter((s) => s.type === 'sketch').map((s) => s.sketchId));
     const planeIds = new Set(this.sel.filter((s) => s.type === 'plane').map((s) => s.planeId));
+    const axisIds = new Set(this.sel.filter((s) => s.type === 'axis').map((s) => s.axisId));
     const curveBySketch = new Map();
     for (const s of this.sel) {
       if (s.type === 'curve') {
@@ -653,7 +701,7 @@ export class App extends Emitter {
       }
     }
     const faceOrEdge = this.sel.some((s) => s.type === 'face' || s.type === 'edge');
-    if (!bodyIds.size && !sketchIds.size && !curveBySketch.size && !planeIds.size) {
+    if (!bodyIds.size && !sketchIds.size && !curveBySketch.size && !planeIds.size && !axisIds.size) {
       if (faceOrEdge) this.ui.toast('Lapot/élt nem lehet törölni – jelöld ki a testet (dupla koppintás)', '', 3000);
       return;
     }
@@ -666,6 +714,7 @@ export class App extends Emitter {
       bodies: st.bodies.filter((b) => !bodyIds.has(b.id)),
       sketches,
       planes: st.planes.filter((p) => !planeIds.has(p.id)),
+      axes: (st.axes || []).filter((a) => !axisIds.has(a.id)),
     };
     this.setSelection([]);
     this.doc.commit('Törlés', ns, { icon: 'trash' });

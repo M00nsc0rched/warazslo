@@ -2,7 +2,7 @@
 // results: [{ shape, role: 'modified'|'new', sourceId?, name? }]
 import { R, oc, scope, KernelError, v3, pnt, dir, vec, wrap, fuse, cut, common, fuseAll,
   translateShape, transformShape, mirrorShape, scaleShape, fixOrientation, faceAt, edgeAt,
-  volumeOf, areaOf, faceMidPointNormal, makeCompound, outerWireOf, innerWiresOf } from './occ.js';
+  volumeOf, areaOf, faceMidPointNormal, faceSurfaceInfo, makeCompound, outerWireOf, innerWiresOf } from './occ.js';
 
 export const OPS = {};
 
@@ -864,4 +864,99 @@ OPS.exportMesh = ({ bodies, tolerance = 0.01, angularTolerance = 0.1 }, ctx) => 
     transfer.push(v.buffer, n.buffer, t.buffer);
   }
   return { info: out, transfer };
+};
+
+// ================================================================ lap cseréje (Replace Face)
+/** Féltér: a sík (origin, normal) azon oldala, ahol a ref pont van. */
+function halfSpace(origin, normal, ref) {
+  const r = scope();
+  try {
+    const pl = r(new oc.gp_Pln(r(pnt(origin)), r(dir(normal))));
+    const face = r(new oc.BRepBuilderAPI_MakeFace(pl)).Face();
+    const hs = r(new oc.BRepPrimAPI_MakeHalfSpace(face, r(pnt(ref))));
+    return wrap(hs.Solid());
+  } finally { r.free(); }
+}
+
+/**
+ * A lap "oldalfalainak" közös iránya: a szomszédos sík (és a lappal párhuzamos
+ * tengelyű hengeres) lapok normálisaira merőleges irány. Egy doboz tetejénél ez a
+ * függőleges akkor is, ha a tetőlap ferde. Ha nem egyértelmű, a lap normálisa.
+ */
+function sideDirection(all, f, n) {
+  const fe = f.edges;
+  const M = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  let cnt = 0;
+  for (const g of all) {
+    if (g.isSame(f)) continue;
+    const t = g.geomType;
+    if (t !== 'PLANE' && t !== 'CYLINDRE') continue;
+    if (!g.edges.some((e) => fe.some((x) => x.isSame(e)))) continue;
+    let m;
+    try {
+      if (t === 'CYLINDRE') {
+        const info = faceSurfaceInfo(g);
+        if (Math.abs(v3.dot(v3.norm(info.axisDir), n)) < 0.7) continue; // pl. lekerekítés az élen
+        m = info.normal;
+      } else m = faceMidPointNormal(g).normal;
+    } catch (e) { continue; }
+    if (!m) continue;
+    if (Math.abs(v3.dot(m, n)) > 0.95) continue; // a lappal párhuzamos szomszéd nem oldalfal
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) M[i][j] += m[i] * m[j];
+    cnt++;
+  }
+  if (cnt < 2) return n;
+  // a legkisebb sajátértékhez tartozó sajátvektor: hatványiteráció (tI - M)-en, a normálisból indulva
+  const tr = M[0][0] + M[1][1] + M[2][2] + 1;
+  let d = n.slice();
+  for (let k = 0; k < 80; k++) {
+    const nd = [0, 1, 2].map((i) => tr * d[i] - (M[i][0] * d[0] + M[i][1] * d[1] + M[i][2] * d[2]));
+    d = v3.norm(nd);
+  }
+  const Md = [0, 1, 2].map((i) => M[i][0] * d[0] + M[i][1] * d[1] + M[i][2] * d[2]);
+  const lam = v3.dot(d, Md) / cnt;
+  if (v3.dot(d, n) < 0) d = v3.mul(d, -1);
+  if (lam > 0.02 || v3.dot(d, n) < 0.3) return n;
+  return d;
+}
+
+/**
+ * A kijelölt sík lapokat a célsíkig nyújtja / vágja vissza.
+ * Az oldalfalak irányában húzott oszlopot a célsík két oldalára bontjuk:
+ * ami a lap és a sík között kívül van, hozzáadjuk; ami a síkon túl belül van, levágjuk.
+ * Így ferde célsík esetén a részben kifelé, részben befelé eső lap is helyes.
+ * args: { body, faces, target: { origin, normal } }
+ */
+OPS.replaceFace = ({ body, faces, target }, ctx) => {
+  let shape = ctx.body(body);
+  const [lo, hi] = shape.boundingBox.bounds;
+  const L = Math.max(10, Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) * 3 + v3.len(v3.sub(target.origin, lo)) * 2);
+  const all = shape.faces;
+  const tn0 = v3.norm(target.normal);
+  // az összes kiválasztott lap geometriáját előre kiolvassuk (a műveletek után az indexek elcsúsznak)
+  const jobs = faces.map((i) => {
+    const f = all[i];
+    if (!f) throw new KernelError('A kijelölt lap már nem létezik');
+    if (f.geomType !== 'PLANE') throw new KernelError('Csak sík lap cserélhető');
+    const { normal: n } = faceMidPointNormal(f);
+    return { f, n, d: sideDirection(all, f, n) };
+  });
+  const minVol = Math.max(1e-9, (L / 3) ** 3 * 1e-12);
+  let changed = false;
+  for (const { f, n, d } of jobs) {
+    if (Math.abs(v3.dot(d, tn0)) < 1e-6) throw new KernelError('A célsík párhuzamos a lap oldalfalaival');
+    // a célsík "kifelé" mutató normálisa (a lap normálisával egy irányba)
+    const tn = v3.dot(tn0, d) > 0 ? tn0 : v3.mul(tn0, -1);
+    const inside = v3.sub(target.origin, v3.mul(tn, L)); // pont a célsík test felőli oldalán
+    const outside = v3.add(target.origin, v3.mul(tn, L));
+    const add = common(prism(f, v3.mul(d, L)), halfSpace(target.origin, tn, inside));
+    const rem = common(prism(f, v3.mul(d, -L)), halfSpace(target.origin, tn, outside));
+    if (Math.abs(volumeOf(add).volume) > minVol) { shape = fuse(shape, add); changed = true; }
+    if (Math.abs(volumeOf(rem).volume) > minVol) { shape = cut(shape, rem); changed = true; }
+  }
+  if (!changed) throw new KernelError('A lap már a célsíkon van');
+  const res = [];
+  const removed = [];
+  pushModified(res, removed, body.id, shape);
+  return { results: res, removed };
 };
