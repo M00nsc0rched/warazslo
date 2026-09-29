@@ -2,6 +2,7 @@
 import { el, onTap, shareOrDownload, safeName } from '../util/misc.js';
 import { icon } from './icons.js';
 import { fmtLen } from '../util/units.js';
+import { DxfWriter } from '../util/dxf.js';
 
 const SHEETS = { A4: [297, 210], A3: [420, 297] };
 
@@ -45,9 +46,11 @@ export class DrawingView {
     bar.append(tog('hidden', 'Rejtett élek'), tog('dims', 'Méretek'), tog('iso', 'Izometrikus'));
     const svgBtn = el('button', { class: 'btn', html: `${icon('exportFile')}<span>SVG</span>` });
     onTap(svgBtn, () => this.exportSVG());
+    const dxfBtn = el('button', { class: 'btn', html: `${icon('exportFile')}<span>DXF</span>` });
+    onTap(dxfBtn, () => this.exportDXF());
     const pdfBtn = el('button', { class: 'btn primary', html: `${icon('share')}<span>PDF / nyomtatás</span>` });
     onTap(pdfBtn, () => this.print());
-    bar.append(svgBtn, pdfBtn);
+    bar.append(svgBtn, dxfBtn, pdfBtn);
     this.root.innerHTML = '';
     this.canvas = el('div', { class: 'dcanvas' });
     this.root.append(bar, this.canvas);
@@ -100,12 +103,21 @@ export class DrawingView {
     if (this.opts.iso && isoS > 0) place.iso = { x: W - margin - gap - B.iso.w * isoS, y: H - margin - titleH - gap - B.iso.h * isoS, s: isoS };
 
     const parts = [];
+    // a DXF exporthoz ugyanazok az elemek lap-koordinátákban (mm, y lefelé)
+    const E = [];
+    this.ents = E;
+    const rec = (pts, layer, closed = false) => E.push({ k: 'pl', pts, layer, closed });
+    const recT = (x, y, h, s, layer, o = {}) => E.push({ k: 'tx', p: [x, y], h, s: String(s), layer, ...o });
     const pathOf = (pl, v, sc, P) => {
       const b = B[v];
       return pl.map(([x, y], i) => `${i ? 'L' : 'M'}${(P.x + (x - b.x0) * sc).toFixed(3)} ${(P.y + (b.y1 - y) * sc).toFixed(3)}`).join('');
     };
     const drawView = (v, P, sc) => {
       const d = this.data[v];
+      const b = B[v];
+      const pts = (pl) => pl.map(([x, y]) => [P.x + (x - b.x0) * sc, P.y + (b.y1 - y) * sc]);
+      if (this.opts.hidden && v !== 'iso') for (const pl of d.hidden) rec(pts(pl), 'REJTETT');
+      for (const pl of d.visible) rec(pts(pl), 'LATHATO');
       if (this.opts.hidden && v !== 'iso') parts.push(`<path d="${d.hidden.map((pl) => pathOf(pl, v, sc, P)).join('')}" fill="none" stroke="#333" stroke-width="0.25" stroke-dasharray="2 1.2"/>`);
       parts.push(`<path d="${d.visible.map((pl) => pathOf(pl, v, sc, P)).join('')}" fill="none" stroke="#000" stroke-width="0.5" stroke-linecap="round" stroke-linejoin="round"/>`);
     };
@@ -118,12 +130,19 @@ export class DrawingView {
         const yy = above ? y - 7 : y + 7;
         parts.push(`<g stroke="#000" stroke-width="0.18" fill="none"><path d="M${x1} ${y}V${yy + (above ? -1.5 : 1.5)}M${x2} ${y}V${yy + (above ? -1.5 : 1.5)}M${x1} ${yy}H${x2}"/></g>`);
         parts.push(arrow(x1, yy, 0), arrow(x2, yy, Math.PI));
+        const ye = yy + (above ? -1.5 : 1.5);
+        rec([[x1, y], [x1, ye]], 'MERET'); rec([[x2, y], [x2, ye]], 'MERET'); rec([[x1, yy], [x2, yy]], 'MERET');
+        rec(arrowPts(x1, yy, 0), 'MERET', true); rec(arrowPts(x2, yy, Math.PI), 'MERET', true);
+        recT((x1 + x2) / 2, yy - 1.2, 3.2, val, 'MERET', { halign: 1 });
         parts.push(`<text x="${(x1 + x2) / 2}" y="${yy - 1.2}" font-size="3.2" text-anchor="middle" font-family="Helvetica, Arial, sans-serif">${val}</text>`);
       };
       const dimV = (y1, y2, x, val) => {
         const xx = x + 7;
         parts.push(`<g stroke="#000" stroke-width="0.18" fill="none"><path d="M${x} ${y1}H${xx + 1.5}M${x} ${y2}H${xx + 1.5}M${xx} ${y1}V${y2}"/></g>`);
         parts.push(arrow(xx, y1, Math.PI / 2), arrow(xx, y2, -Math.PI / 2));
+        rec([[x, y1], [xx + 1.5, y1]], 'MERET'); rec([[x, y2], [xx + 1.5, y2]], 'MERET'); rec([[xx, y1], [xx, y2]], 'MERET');
+        rec(arrowPts(xx, y1, Math.PI / 2), 'MERET', true); rec(arrowPts(xx, y2, -Math.PI / 2), 'MERET', true);
+        recT(xx + 0.9, (y1 + y2) / 2, 3.2, val, 'MERET', { halign: 1, rot: 90 });
         parts.push(`<text x="${xx + 1.3}" y="${(y1 + y2) / 2}" font-size="3.2" font-family="Helvetica, Arial, sans-serif" transform="rotate(-90 ${xx + 1.3} ${(y1 + y2) / 2})" text-anchor="middle" dy="-0.4">${val}</text>`);
       };
       const f = place.front, fb = B.front;
@@ -141,6 +160,13 @@ export class DrawingView {
     const date = new Date().toLocaleDateString('hu-HU');
     const tbW = 120, tbX = W - margin - tbW, tbY = H - margin - titleH;
     parts.push(`<rect x="${margin}" y="${margin}" width="${W - 2 * margin}" height="${H - 2 * margin}" fill="none" stroke="#000" stroke-width="0.7"/>`);
+    rec([[margin, margin], [W - margin, margin], [W - margin, H - margin], [margin, H - margin]], 'KERET', true);
+    rec([[tbX, tbY], [tbX + tbW, tbY], [tbX + tbW, tbY + titleH], [tbX, tbY + titleH]], 'KERET', true);
+    rec([[tbX, tbY + 11], [tbX + tbW, tbY + 11]], 'KERET'); rec([[tbX + 80, tbY], [tbX + 80, tbY + titleH]], 'KERET');
+    recT(tbX + 3, tbY + 8, 5.5, name, 'SZOVEG');
+    recT(tbX + 3, tbY + 17.5, 3.2, `Warázsló · ${date} · mm`, 'SZOVEG');
+    recT(tbX + 83, tbY + 5, 2.6, 'Méretarány', 'SZOVEG'); recT(tbX + 83, tbY + 9.5, 4.2, scaleTxt, 'SZOVEG');
+    recT(tbX + 83, tbY + 15, 2.6, 'Lap', 'SZOVEG'); recT(tbX + 83, tbY + 19.5, 4, this.opts.sheet, 'SZOVEG');
     parts.push(`<g font-family="Helvetica, Arial, sans-serif" fill="#000"><rect x="${tbX}" y="${tbY}" width="${tbW}" height="${titleH}" fill="#fff" stroke="#000" stroke-width="0.5"/>
       <path d="M${tbX} ${tbY + 11}H${tbX + tbW}M${tbX + 80} ${tbY}V${tbY + titleH}" stroke="#000" stroke-width="0.3"/>
       <text x="${tbX + 3}" y="${tbY + 8}" font-size="5.5" font-weight="700">${escapeXml(name)}</text>
@@ -149,7 +175,7 @@ export class DrawingView {
       <text x="${tbX + 83}" y="${tbY + 15}" font-size="2.6">Lap</text><text x="${tbX + 83}" y="${tbY + 19.5}" font-size="4">${this.opts.sheet}</text>
       <g transform="translate(${tbX - 18} ${tbY + 11})" stroke="#000" stroke-width="0.3" fill="none"><path d="M0 -4L6 -2V2L0 4Z"/><circle cx="12" cy="0" r="4"/><circle cx="12" cy="0" r="1.8"/></g></g>`);
     // nézetnevek
-    const lbl = (v, txt) => { const p = place[v]; if (p) parts.push(`<text x="${p.x}" y="${p.y - 2}" font-size="2.8" fill="#555" font-family="Helvetica, Arial, sans-serif">${txt}</text>`); };
+    const lbl = (v, txt) => { const p = place[v]; if (p) recT(p.x, p.y - 2, 2.8, txt, 'SZOVEG'); if (p) parts.push(`<text x="${p.x}" y="${p.y - 2}" font-size="2.8" fill="#555" font-family="Helvetica, Arial, sans-serif">${txt}</text>`); };
     if (!this.opts.dims) { lbl('front', 'ELÖLNÉZET'); lbl('left', 'OLDALNÉZET'); lbl('top', 'FELÜLNÉZET'); }
     lbl('iso', 'IZOMETRIKUS');
 
@@ -168,6 +194,21 @@ export class DrawingView {
     shareOrDownload(new Blob([this.svgText], { type: 'image/svg+xml' }), `${safeName(this.app.doc.name)}_rajz.svg`);
   }
 
+  /** DXF: a rajz valós méretben (1:1, mm) – a lap, a keret és a szövegek a méretaránnyal felnagyítva. */
+  exportDXF() {
+    if (!this.ents) return;
+    const [, H] = SHEETS[this.opts.sheet];
+    const k = 1 / (this.scale || 1);
+    const P = ([x, y]) => [x * k, (H - y) * k];
+    const w = new DxfWriter();
+    w.addLayer('LATHATO', 7).addLayer('REJTETT', 8, 'DASHED').addLayer('MERET', 3).addLayer('KERET', 7).addLayer('SZOVEG', 7);
+    for (const e of this.ents) {
+      if (e.k === 'pl') w.polyline(e.pts.map(P), e.layer, e.closed);
+      else w.text(P(e.p), e.h * k, e.s, e.layer, { rot: e.rot || 0, halign: e.halign || 0 });
+    }
+    shareOrDownload(new Blob([w.toString()], { type: 'application/dxf' }), `${safeName(this.app.doc.name)}_rajz.dxf`);
+  }
+
   print() {
     if (!this.svgText) return;
     const [W, H] = SHEETS[this.opts.sheet];
@@ -183,6 +224,12 @@ function arrow(x, y, ang) {
   const c = Math.cos(ang), s = Math.sin(ang);
   const p1 = [x + c * L - s * Wd, y + s * L + c * Wd], p2 = [x + c * L + s * Wd, y + s * L - c * Wd];
   return `<path d="M${x} ${y}L${p1[0]} ${p1[1]}L${p2[0]} ${p2[1]}Z" fill="#000"/>`;
+}
+
+function arrowPts(x, y, ang) {
+  const L = 2.2, Wd = 0.7;
+  const c = Math.cos(ang), s = Math.sin(ang);
+  return [[x, y], [x + c * L - s * Wd, y + s * L + c * Wd], [x + c * L + s * Wd, y + s * L - c * Wd]];
 }
 
 function escapeXml(s) { return String(s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])); }

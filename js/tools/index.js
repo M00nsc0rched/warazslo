@@ -270,7 +270,7 @@ function insertMenu(app, anchor) {
     { icon: 'gear', label: 'Fogaskerék', onTap: () => app.startTool('gear') },
     { icon: 'bolt', label: 'Csavar / anya', onTap: () => app.startTool('gear', { kind: 'bolt' }) },
     { head: 'Fájl' },
-    { icon: 'importFile', label: 'STEP / STL importálása', onTap: () => sheets.importModel(app) },
+    { icon: 'importFile', label: 'STEP / STL / DXF importálása', onTap: () => sheets.importModel(app) },
     { icon: 'image', label: 'Referencia kép', onTap: () => sheets.insertImage(app) },
   ]);
 }

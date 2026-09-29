@@ -24,9 +24,10 @@ előfizetés nélkül. Böngészőben fut, telepíthető a főképernyőre, és 
   szétvágás, méretezés, mozgatás/forgatás gizmóval, másolás.
 - **Extrák, amik a Shapr3D-ből hiányoznak:** furat-varázsló (M2–M12, kúpos/hengeres süllyesztés), evolvens
   fogaskerék-generátor, csavar/anya generátor, alaptestek, tömeg- és térfogatszámítás anyagsűrűséggel,
-  2D műszaki rajz (európai vetítés, rejtett élek, méretek, SVG/PDF), AR nézet (USDZ).
+  2D műszaki rajz (európai vetítés, rejtett élek, méretek, SVG/PDF/DXF), AR nézet (USDZ).
 - **Nézet mód:** csak megtekintés – szabványos nézetek, körbeforgatás, metszet, mérés, izolálás.
-- **Import/export:** STEP, STL (import és export), OBJ, USDZ, PNG, saját `.warazslo` projektfájl.
+- **Import/export:** STEP, STL (import és export), DXF (import vázlatba; export vázlatból, sík lap körvonalából és
+  műszaki rajzból), 3MF, OBJ, GLB, USDZ, HTML nézet, PNG, saját `.warazslo` projektfájl.
 - Visszavonás/újra, előzmények (bármely lépésre visszaugrás), automatikus mentés az eszközre.
 
 ## Kezelés

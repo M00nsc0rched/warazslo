@@ -67,7 +67,7 @@ export function projectMenu(app, anchor) {
   app.ui.menu(anchor, [
     { icon: 'rename', label: 'Átnevezés', onTap: () => app.renameProjectDialog() },
     { icon: 'exportFile', label: 'Exportálás…', onTap: () => exportMenu(app, anchor, false) },
-    { icon: 'importFile', label: 'STEP / STL importálása', onTap: () => importModel(app) },
+    { icon: 'importFile', label: 'STEP / STL / DXF importálása', onTap: () => importModel(app) },
     { icon: 'image', label: 'Referencia kép beszúrása', onTap: () => insertImage(app) },
     { icon: 'share', label: 'Projektfájl mentése (.warazslo)', onTap: () => exportProjectFile(app) },
     { sep: true },
@@ -97,6 +97,7 @@ const EXPORT_FORMATS = [
   ['html', 'HTML nézet', 'Megosztható 3D nézet böngészőben', 'share'],
   ['brep', 'BREP', 'OpenCascade natív', 'cube'],
   ['drawing', 'Műszaki rajz', 'PDF / SVG / DXF', 'drawing'],
+  ['dxf', 'DXF', 'Vázlat vagy sík lap körvonala (lézer, CNC)', 'sketch'],
   ['png', 'Kép', 'PNG képernyőkép', 'camera'],
 ];
 const QUALITY = { base: [0.05, 0.25, 'Alap'], high: [0.01, 0.1, 'Magas'], ultra: [0.003, 0.05, 'Nagyon magas'] };
@@ -125,7 +126,7 @@ export function exportMenu(app, anchor, selectionOnly) {
     }
     body.append(grid);
     const meshFmt = ['stl', '3mf', 'obj', 'glb', 'html', 'usdz'].includes(o.fmt);
-    if (!['png', 'drawing'].includes(o.fmt)) body.append(chips('scope', [...(hasSel ? [['sel', 'Kijelölt testek']] : []), ['visible', 'Látható testek'], ['all', 'Minden test']]));
+    if (!['png', 'drawing', 'dxf'].includes(o.fmt)) body.append(chips('scope', [...(hasSel ? [['sel', 'Kijelölt testek']] : []), ['visible', 'Látható testek'], ['all', 'Minden test']]));
     if (meshFmt) body.append(chips('quality', Object.entries(QUALITY).map(([k, v]) => [k, `${v[2]} felbontás`])));
     if (['step', 'stl', '3mf', 'obj'].includes(o.fmt)) body.append(chips('unit', [['mm', 'Milliméter'], ['in', 'Hüvelyk']]));
     if (['step', 'stl', '3mf', 'obj'].includes(o.fmt)) {
@@ -155,6 +156,7 @@ function scopeBodies(app, scope) {
 async function runExport(app, o) {
   if (o.fmt === 'png') return screenshot(app);
   if (o.fmt === 'drawing') return openDrawing(app);
+  if (o.fmt === 'dxf') return exportDxf2D(app);
   const bodies = scopeBodies(app, o.scope);
   if (!bodies.length) { app.ui.toast('Nincs exportálható test', 'error'); return; }
   const name = bodies.length === 1 ? bodies[0].name : app.doc.name;
@@ -340,9 +342,10 @@ export function exportProjectFile(app) {
 
 // ---------------------------------------------------------------- import
 export async function importModel(app) {
-  const file = await pickFile('.step,.stp,.stl,.STEP,.STP,.STL');
+  const file = await pickFile('.step,.stp,.stl,.dxf,.STEP,.STP,.STL,.DXF');
   if (!file) return;
   const ext = file.name.split('.').pop().toLowerCase();
+  if (ext === 'dxf') return importDxf(app, file);
   const format = ext === 'stl' ? 'stl' : 'step';
   try {
     app.ui.toast(`Importálás: ${file.name}…`, '', 2000);
@@ -354,6 +357,109 @@ export async function importModel(app) {
     app.ui.toast(`${res.results.length} test importálva`, 'ok');
   } catch (e) {
     app.ui.toast(`Import hiba: ${e.message}`, 'error', 5000);
+  }
+}
+
+/** DXF importálása új vázlatba: a kijelölt sík lapra / síkra, különben a rácssíkra (alapból XY). */
+export async function importDxf(app, file) {
+  try {
+    const { parseDxf } = await import('../util/dxf.js');
+    const r = parseDxf(await file.text());
+    const skipped = Object.entries(r.skipped).map(([k, n]) => `${k} ×${n}`).join(', ');
+    if (!r.count) { app.ui.toast(`A DXF-ben nincs olvasható 2D geometria${skipped ? ` (kihagyva: ${skipped})` : ''}`, 'error', 5000); return; }
+    if (r.count > 4000 && !(await app.ui.confirm('Nagy DXF', `${r.count} elem – a régiók számítása lassú lehet. Folytatod?`, 'Importálás', false))) return;
+    // célsík
+    let frame = null;
+    const s = app.sel.length === 1 ? app.sel[0] : null;
+    if (s && s.type === 'face') {
+      const g = app.bodies.gfx.get(s.bodyId);
+      const fi = g && g.data.faces && g.data.faces[s.index];
+      if (fi && fi.type === 'PLANE') frame = canonicalFrame(new THREE.Vector3(...fi.normal), new THREE.Vector3(...fi.center));
+    } else if (s && s.type === 'plane') frame = planeFromJSON(app.doc.plane(s.planeId));
+    if (!frame) {
+      const gf = app.vp.gridFrame;
+      frame = { origin: gf.origin.clone(), xDir: gf.xDir.clone(), yDir: gf.yDir.clone(), normal: gf.normal.clone() };
+    }
+    let curves = r.curves;
+    let moved = false;
+    if (r.bbox) {
+      // messze az origótól (pl. térképi koordináták): a bal alsó sarkot az origóba toljuk
+      const [x0, y0, x1, y1] = r.bbox;
+      const size = Math.max(x1 - x0, y1 - y0, 1);
+      if (Math.hypot((x0 + x1) / 2, (y0 + y1) / 2) > size * 5) {
+        const { convertCurves } = await import('../app.js');
+        const from = { origin: new THREE.Vector3(x0, y0, 0), xDir: new THREE.Vector3(1, 0, 0), yDir: new THREE.Vector3(0, 1, 0), normal: new THREE.Vector3(0, 0, 1) };
+        const to = { origin: new THREE.Vector3(0, 0, 0), xDir: new THREE.Vector3(1, 0, 0), yDir: new THREE.Vector3(0, 1, 0), normal: new THREE.Vector3(0, 0, 1) };
+        curves = convertCurves(curves.map((c) => ({ ...c })), to, from);
+        moved = true;
+      }
+    }
+    const res = app.addCurves(frame, curves.map((c) => ({ ...c, id: uid('c') })), 'DXF importálás', 'importFile');
+    if (res) {
+      const sk = app.doc.sketch(res.sketchId);
+      if (sk) {
+        const f = planeFromJSON(sk.plane);
+        const box = new THREE.Box3();
+        for (const c of res.curves) for (const e of curveEnds(c).concat(c.p ? [c.p] : c.c ? [c.c] : c.pts ? c.pts : [])) box.expandByPoint(f.origin.clone().addScaledVector(f.xDir, e[0]).addScaledVector(f.yDir, e[1]));
+        if (!box.isEmpty()) app.vp.fitBox(box.union(app.bodies.bounds()));
+      }
+    }
+    app.ui.toast(`${r.count} elem importálva${moved ? ' (az origóhoz igazítva)' : ''}${skipped ? ` · kihagyva: ${skipped}` : ''}`, 'ok', 4500);
+  } catch (e) {
+    console.error(e);
+    app.ui.toast(`DXF hiba: ${e.message}`, 'error', 5000);
+  }
+}
+
+/** 2D DXF export: a kijelölt vázlat, a kijelölt sík lap körvonala, vagy az aktív vázlat. */
+export async function exportDxf2D(app) {
+  const { DxfWriter } = await import('../util/dxf.js');
+  const w = new DxfWriter({ units: getUnit() === 'in' ? 'in' : 'mm' });
+  w.addLayer('KONTUR', 7).addLayer('SEGEDVONAL', 8, 'DASHED');
+  const scale = getUnit() === 'in' ? 1 / 25.4 : 1;
+  const scaled = (curves) => (scale === 1 ? curves : curves.map((c) => scaleCurve(c, scale)));
+  const sel = app.sel;
+  let name = app.doc.name;
+  let curves = null;
+  const skIds = [...new Set(sel.filter((s) => s.sketchId).map((s) => s.sketchId))];
+  const faces = sel.filter((s) => s.type === 'face');
+  if (skIds.length === 1) {
+    const sk = app.doc.sketch(skIds[0]);
+    curves = sk.curves; name = `${app.doc.name}_${sk.name}`;
+  } else if (faces.length === 1) {
+    const s = faces[0];
+    const g = app.bodies.gfx.get(s.bodyId);
+    const fi = g && g.data.faces && g.data.faces[s.index];
+    if (!fi || fi.type !== 'PLANE') { app.ui.toast('Csak sík lap körvonala exportálható', 'error'); return; }
+    const b = app.doc.body(s.bodyId);
+    const ids = await app.kernel.query('faceEdges', { body: { id: b.id, rev: b.rev }, faces: [s.index] });
+    const { projectEdge } = await import('../tools/extra.js');
+    const frame = canonicalFrame(new THREE.Vector3(...fi.normal), new THREE.Vector3(...fi.center));
+    curves = ids.flatMap((i) => projectEdge(app, s.bodyId, i, frame));
+    name = `${app.doc.name}_${b.name}_lap`;
+  } else if (app.tool && app.tool.isSketchTool && app.tool.frame) {
+    const sk = app.sketches.findSketchOnPlane(app.tool.frame);
+    if (sk) { curves = sk.curves; name = `${app.doc.name}_${sk.name}`; }
+  } else if (app.doc.state.sketches.length === 1) {
+    const sk = app.doc.state.sketches[0];
+    curves = sk.curves; name = `${app.doc.name}_${sk.name}`;
+  }
+  if (!curves || !curves.length) { app.ui.toast('Jelölj ki egy vázlatot (vagy elemét) vagy egy sík lapot a DXF exporthoz', 'error', 4000); return; }
+  w.curves(scaled(curves), 'KONTUR', 'SEGEDVONAL');
+  shareOrDownload(new Blob([w.toString()], { type: 'application/dxf' }), `${safeName(name)}.dxf`);
+}
+
+function scaleCurve(c, k) {
+  const S = (p) => [p[0] * k, p[1] * k];
+  switch (c.t) {
+    case 'line': return { ...c, a: S(c.a), b: S(c.b) };
+    case 'circle': return { ...c, c: S(c.c), r: c.r * k };
+    case 'arc': return { ...c, c: S(c.c), r: c.r * k };
+    case 'ellipse': return { ...c, c: S(c.c), rx: c.rx * k, ry: c.ry * k };
+    case 'spline': return { ...c, pts: c.pts.map(S) };
+    case 'point': return { ...c, p: S(c.p) };
+    case 'text': return { ...c, p: S(c.p), size: c.size * k, spacing: (c.spacing || 0) * k };
+    default: return c;
   }
 }
 

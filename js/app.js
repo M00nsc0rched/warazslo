@@ -991,6 +991,7 @@ export function convertCurves(curves, from, to) {
       case 'point': return { ...c, p: P(c.p) };
       case 'text': return { ...c, p: P(c.p), rot: ang(c.rot || 0, c.p), ...(flip ? { mirror: !c.mirror } : {}) };
       case 'spline': return { ...c, pts: c.pts.map(P) };
+      case 'ellipse': return { ...c, c: P(c.c), rot: ang(c.rot || 0, c.c) };
       case 'arc': {
         let a0 = ang(c.a0, c.c), a1 = ang(c.a1, c.c);
         if (flip) [a0, a1] = [a1, a0];

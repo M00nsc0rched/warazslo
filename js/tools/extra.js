@@ -59,7 +59,7 @@ export class ReplaceFaceTool extends KernelTool {
 
 // ---------------------------------------------------------------- vetítés / él eltolás
 /** Él -> vázlatgörbék a síkon (vonal, kör, ív; egyéb: spline mintavétellel). */
-function projectEdge(app, bodyId, index, frame) {
+export function projectEdge(app, bodyId, index, frame) {
   const g = app.bodies.gfx.get(bodyId);
   const e = g && g.data.edges ? g.data.edges[index] : null;
   if (!e) return [];
